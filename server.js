@@ -12,8 +12,6 @@ const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 const reservations = [];
 
 app.set('trust proxy', 3);
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 function findEvent(id) {
   return events.find((event) => event._id === id);
@@ -78,9 +76,54 @@ function createCheckoutSession(reservation, baseUrl) {
   });
 }
 
+async function handlePayment(reservation, session) {
+  if (reservation.status === 'paid') {
+    return;
+  }
+
+  if (reservation.expiresAt > Date.now()) {
+    reservation.status = 'paid';
+    reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
+    return;
+  }
+
+  await stripe.refunds.create(
+    { payment_intent: session.payment_intent },
+    { idempotencyKey: `refund-${session.id}` }
+  );
+}
+
 function page(file) {
   return (req, res) => res.sendFile(path.join(__dirname, 'public', file));
 }
+
+app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers['stripe-signature'],
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    return res.status(400).json({ error: 'Niepoprawny podpis webhooka' });
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    console.log(`Webhook: ${session.payment_status}, rezerwacja ${session.client_reference_id}`);
+
+    const reservation = findReservation(session.client_reference_id);
+    if (reservation && session.payment_status === 'paid') {
+      await handlePayment(reservation, session);
+    }
+  }
+
+  res.json({ received: true });
+});
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/events/:id', page('event.html'));
 app.get('/reserve', page('reserve.html'));
@@ -188,6 +231,9 @@ app.post('/api/reservations/:id/checkout', async (req, res) => {
 
 app.use((err, req, res, next) => {
   const status = err.status || 500;
+  if (status >= 500) {
+    console.error(err);
+  }
   res.status(status).json({ error: status < 500 ? 'Niepoprawne zapytanie' : 'Błąd serwera' });
 });
 
