@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinoBilet – repertuar</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a href="/">KinoBilet</a></header>
+  <main>
+    <h1>Repertuar</h1>
+    <ul id="events" class="events"></ul>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    async function load() {
+      const res = await fetch('/api/events');
+      const events = await res.json();
+      const list = document.getElementById('events');
+
+      for (const event of events) {
+        const item = document.createElement('li');
+        item.innerHTML = `
+          <a href="/events/${event._id}">
+            <strong>${event.title}</strong>
+            <span>${formatDate(event.startsAt)} · ${event.hall}</span>
+          </a>`;
+        list.appendChild(item);
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
