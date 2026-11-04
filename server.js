@@ -141,6 +141,17 @@ app.post('/api/reservations/:id/purchase', (req, res) => {
   res.json({ code: reservation.code });
 });
 
+app.get('/api/debug-ip', (req, res) => {
+  res.json({
+    ip: req.ip,
+    ips: req.ips,
+    remote: req.socket.remoteAddress,
+    forwardedFor: req.headers['x-forwarded-for'] || null,
+    cfConnectingIp: req.headers['cf-connecting-ip'] || null,
+    trueClientIp: req.headers['true-client-ip'] || null,
+  });
+});
+
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   res.status(status).json({ error: status < 500 ? 'Niepoprawne zapytanie' : 'Błąd serwera' });
