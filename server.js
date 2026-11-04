@@ -10,7 +10,7 @@ const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 
 const reservations = [];
 
-app.set('trust proxy', 1);
+app.set('trust proxy', 2);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
