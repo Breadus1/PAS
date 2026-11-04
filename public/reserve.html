@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinoBilet – rezerwacja fotela</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a href="/">KinoBilet</a></header>
+  <main>
+    <a id="back" href="/">← Wróć do sali</a>
+    <h1>Rezerwacja fotela</h1>
+    <p id="info">Ładowanie…</p>
+
+    <form id="form" hidden>
+      <label>
+        Imię
+        <input name="customerName" required>
+      </label>
+      <label>
+        E-mail
+        <input name="email" type="email" required>
+      </label>
+      <button type="submit">Zarezerwuj</button>
+      <p id="error" class="error"></p>
+    </form>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const eventId = params.get('eventId');
+    const seatId = params.get('seatId');
+
+    const info = document.getElementById('info');
+    const form = document.getElementById('form');
+    const error = document.getElementById('error');
+
+    async function load() {
+      const res = await fetch(`/api/events/${eventId}`);
+      if (!res.ok) {
+        info.textContent = 'Nie ma takiego seansu';
+        return;
+      }
+
+      const { event } = await res.json();
+      if (!event.seats.includes(seatId)) {
+        info.textContent = 'Nie ma takiego fotela';
+        return;
+      }
+
+      document.getElementById('back').href = `/events/${event._id}`;
+      info.textContent = `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(seatId)}`;
+      form.hidden = false;
+    }
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true;
+      error.textContent = '';
+
+      const res = await fetch('/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId,
+          seatId,
+          customerName: form.customerName.value,
+          email: form.email.value,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        location.href = `/reservations/${data.reservationId}`;
+      } else {
+        error.textContent = data.error;
+        button.disabled = false;
+      }
+    };
+
+    load();
+  </script>
+</body>
+</html>

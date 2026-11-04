@@ -1,9 +1,11 @@
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const events = require('./events');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 
 const reservations = [];
 
@@ -25,11 +27,23 @@ function takenSeats(eventId) {
     .map((r) => r.seatId);
 }
 
+function isFilled(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function reservationResponse(reservation) {
+  return {
+    reservationId: reservation._id,
+    expiresAt: new Date(reservation.expiresAt).toISOString(),
+  };
+}
+
 function page(file) {
   return (req, res) => res.sendFile(path.join(__dirname, 'public', file));
 }
 
 app.get('/events/:id', page('event.html'));
+app.get('/reserve', page('reserve.html'));
 
 app.get('/api/events', (req, res) => {
   res.json(events);
@@ -41,6 +55,57 @@ app.get('/api/events/:id', (req, res) => {
     return res.status(404).json({ error: 'Nie ma takiego seansu' });
   }
   res.json({ event, takenSeats: takenSeats(event._id) });
+});
+
+app.post('/api/reservations', (req, res) => {
+  const { eventId, seatId, customerName, email } = req.body || {};
+
+  const event = findEvent(eventId);
+  if (!event) {
+    return res.status(404).json({ error: 'Nie ma takiego seansu' });
+  }
+  if (!event.seats.includes(seatId)) {
+    return res.status(400).json({ error: 'Nie ma takiego fotela' });
+  }
+  if (!isFilled(customerName) || !isFilled(email) || !email.includes('@')) {
+    return res.status(400).json({ error: 'Podaj imię i poprawny e-mail' });
+  }
+
+  const now = Date.now();
+  const holder = reservations.find(
+    (r) => r.eventId === eventId && r.seatId === seatId && holdsSeat(r, now)
+  );
+
+  if (holder) {
+    const sameRequest =
+      holder.status === 'reserved' &&
+      holder.customerName === customerName &&
+      holder.email === email;
+
+    if (sameRequest) {
+      return res.status(200).json(reservationResponse(holder));
+    }
+    return res.status(409).json({ error: 'Ten fotel jest już zajęty' });
+  }
+
+  const reservation = {
+    _id: crypto.randomUUID(),
+    eventId,
+    seatId,
+    customerName,
+    email,
+    expiresAt: now + RESERVATION_MINUTES * 60 * 1000,
+    status: 'reserved',
+    code: null,
+  };
+  reservations.push(reservation);
+
+  res.status(201).json(reservationResponse(reservation));
+});
+
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  res.status(status).json({ error: status < 500 ? 'Niepoprawne zapytanie' : 'Błąd serwera' });
 });
 
 app.listen(PORT, () => {
