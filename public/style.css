@@ -51,3 +51,46 @@ a {
   margin-top: 4px;
   color: #666;
 }
+
+.screen {
+  margin: 24px 0 16px;
+  padding: 4px;
+  background: #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 4px;
+  text-align: center;
+}
+
+.seats {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 6px;
+}
+
+.seat {
+  padding: 8px 0;
+  border: none;
+  border-radius: 4px;
+  background: #3f9f52;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seat:hover {
+  background: #2f7d3f;
+}
+
+.seat.taken {
+  background: #bbb;
+  cursor: not-allowed;
+}
+
+.legend .seat {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  vertical-align: middle;
+}

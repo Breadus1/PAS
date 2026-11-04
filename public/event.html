@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinoBilet – wybór fotela</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a href="/">KinoBilet</a></header>
+  <main>
+    <a href="/">← Repertuar</a>
+    <h1 id="title">Ładowanie…</h1>
+    <p id="info"></p>
+
+    <div class="screen">EKRAN</div>
+    <div id="seats" class="seats"></div>
+
+    <p class="legend">
+      <span class="seat"></span> wolny
+      <span class="seat taken"></span> zajęty
+    </p>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    const eventId = location.pathname.split('/')[2];
+
+    async function load() {
+      const res = await fetch(`/api/events/${eventId}`);
+      if (!res.ok) {
+        document.getElementById('title').textContent = 'Nie ma takiego seansu';
+        return;
+      }
+
+      const { event, takenSeats } = await res.json();
+      document.getElementById('title').textContent = event.title;
+      document.getElementById('info').textContent = `${formatDate(event.startsAt)} · ${event.hall}`;
+
+      const seats = document.getElementById('seats');
+      for (const seatId of event.seats) {
+        const button = document.createElement('button');
+        button.className = 'seat';
+        button.textContent = seatId;
+
+        if (takenSeats.includes(seatId)) {
+          button.classList.add('taken');
+          button.disabled = true;
+        } else {
+          button.onclick = () => {
+            location.href = `/reserve?eventId=${event._id}&seatId=${seatId}`;
+          };
+        }
+
+        seats.appendChild(button);
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
