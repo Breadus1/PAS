@@ -57,7 +57,6 @@ function createCheckoutSession(reservation, baseUrl) {
 
   return stripe.checkout.sessions.create({
     mode: 'payment',
-    payment_method_types: ['card'],
     client_reference_id: reservation._id,
     line_items: [
       {
@@ -109,7 +108,9 @@ app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyn
     return res.status(400).json({ error: 'Niepoprawny podpis webhooka' });
   }
 
-  if (event.type === 'checkout.session.completed') {
+  const paymentEvents = ['checkout.session.completed', 'checkout.session.async_payment_succeeded'];
+
+  if (paymentEvents.includes(event.type)) {
     const session = event.data.object;
     console.log(`Webhook: ${session.payment_status}, rezerwacja ${session.client_reference_id}`);
 
