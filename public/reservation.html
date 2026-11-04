@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinoBilet – Twoja rezerwacja</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a href="/">KinoBilet</a></header>
+  <main>
+    <h1 id="title">Twoja rezerwacja</h1>
+    <p id="info">Ładowanie…</p>
+
+    <section id="pending" hidden>
+      <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
+    </section>
+
+    <section id="expired" hidden>
+      <p class="error">Rezerwacja wygasła, fotel wrócił do puli.</p>
+      <a id="again" href="/">Wybierz fotel jeszcze raz</a>
+    </section>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    const reservationId = location.pathname.split('/')[2];
+    let reservation;
+    let timer;
+
+    function show(sectionId) {
+      for (const section of document.querySelectorAll('section')) {
+        section.hidden = section.id !== sectionId;
+      }
+    }
+
+    function tick() {
+      const left = new Date(reservation.expiresAt) - Date.now();
+      if (left <= 0) {
+        clearInterval(timer);
+        show('expired');
+        return;
+      }
+
+      const minutes = Math.floor(left / 60000);
+      const seconds = Math.floor(left / 1000) % 60;
+      document.getElementById('timer').textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    async function load() {
+      const res = await fetch(`/api/reservations/${reservationId}`);
+      if (!res.ok) {
+        document.getElementById('title').textContent = 'Nie ma takiej rezerwacji';
+        document.getElementById('info').textContent = '';
+        return;
+      }
+      reservation = await res.json();
+
+      const eventRes = await fetch(`/api/events/${reservation.eventId}`);
+      const { event } = await eventRes.json();
+      document.getElementById('info').textContent =
+        `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(reservation.seatId)}`;
+      document.getElementById('again').href = `/events/${event._id}`;
+
+      show('pending');
+      tick();
+      timer = setInterval(tick, 1000);
+    }
+
+    load();
+  </script>
+</body>
+</html>

@@ -27,6 +27,10 @@ function takenSeats(eventId) {
     .map((r) => r.seatId);
 }
 
+function findReservation(id) {
+  return reservations.find((reservation) => reservation._id === id);
+}
+
 function isFilled(value) {
   return typeof value === 'string' && value.trim() !== '';
 }
@@ -44,6 +48,7 @@ function page(file) {
 
 app.get('/events/:id', page('event.html'));
 app.get('/reserve', page('reserve.html'));
+app.get('/reservations/:id', page('reservation.html'));
 
 app.get('/api/events', (req, res) => {
   res.json(events);
@@ -101,6 +106,20 @@ app.post('/api/reservations', (req, res) => {
   reservations.push(reservation);
 
   res.status(201).json(reservationResponse(reservation));
+});
+
+app.get('/api/reservations/:id', (req, res) => {
+  const reservation = findReservation(req.params.id);
+  if (!reservation) {
+    return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
+  }
+  res.json({
+    ...reservationResponse(reservation),
+    eventId: reservation.eventId,
+    seatId: reservation.seatId,
+    status: reservation.status,
+    code: reservation.code,
+  });
 });
 
 app.use((err, req, res, next) => {
