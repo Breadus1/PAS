@@ -12,14 +12,20 @@
     <h1 id="title">Twoja rezerwacja</h1>
     <p id="info">Ładowanie…</p>
 
-    <section id="pending" hidden>
+    <section id="held" hidden>
+      <p id="cancelled" class="error" hidden>Płatność została przerwana. Możesz spróbować jeszcze raz.</p>
       <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
-      <button id="buy" class="button">Zapłać</button>
+      <button id="pay" class="button">Zapłać</button>
       <p id="error" class="error"></p>
+    </section>
+
+    <section id="processing" hidden>
+      <p>Płatność w toku… Bilet pojawi się tutaj za chwilę.</p>
     </section>
 
     <section id="expired" hidden>
       <p class="error">Rezerwacja wygasła, fotel wrócił do puli.</p>
+      <p>Jeśli płatność dotarła po czasie, zwrócimy ją automatycznie.</p>
       <a id="again" href="/">Wybierz fotel jeszcze raz</a>
     </section>
 
@@ -33,6 +39,7 @@
   <script src="/common.js"></script>
   <script>
     const reservationId = location.pathname.split('/')[2];
+    const payment = new URLSearchParams(location.search).get('payment');
     let reservation;
     let timer;
 
@@ -55,40 +62,54 @@
       document.getElementById('timer').textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
-    function showTicket(code) {
-      clearInterval(timer);
-      document.getElementById('title').textContent = 'Twój bilet';
-      document.getElementById('code').textContent = code;
-      show('ticket');
+    async function fetchReservation() {
+      const res = await fetch(`/api/reservations/${reservationId}`);
+      return res.ok ? res.json() : null;
+    }
+
+    function render() {
+      if (reservation.status === 'paid') {
+        document.getElementById('title').textContent = 'Twój bilet';
+        document.getElementById('code').textContent = reservation.code;
+        show('ticket');
+      } else if (reservation.status === 'expired') {
+        show('expired');
+      } else if (payment === 'success') {
+        show('processing');
+        setTimeout(refresh, 2000);
+      } else {
+        document.getElementById('cancelled').hidden = payment !== 'cancelled';
+        document.getElementById('pay').textContent = `Zapłać ${formatPrice(reservation.amount)}`;
+        show('held');
+        tick();
+        timer = setInterval(tick, 1000);
+      }
+    }
+
+    async function refresh() {
+      reservation = await fetchReservation();
+      render();
     }
 
     async function load() {
-      const res = await fetch(`/api/reservations/${reservationId}`);
-      if (!res.ok) {
+      reservation = await fetchReservation();
+      if (!reservation) {
         document.getElementById('title').textContent = 'Nie ma takiej rezerwacji';
         document.getElementById('info').textContent = '';
         return;
       }
-      reservation = await res.json();
 
       const eventRes = await fetch(`/api/events/${reservation.eventId}`);
       const { event } = await eventRes.json();
       document.getElementById('info').textContent =
-        `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(reservation.seatId)}`;
+        `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(reservation.seatId)} · ${formatPrice(reservation.amount)}`;
       document.getElementById('again').href = `/events/${event._id}`;
 
-      if (reservation.status === 'purchased') {
-        showTicket(reservation.code);
-        return;
-      }
-
-      show('pending');
-      tick();
-      timer = setInterval(tick, 1000);
+      render();
     }
 
-    document.getElementById('buy').onclick = async () => {
-      const button = document.getElementById('buy');
+    document.getElementById('pay').onclick = async () => {
+      const button = document.getElementById('pay');
       const error = document.getElementById('error');
       button.disabled = true;
       error.textContent = '';
