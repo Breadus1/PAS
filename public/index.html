@@ -25,7 +25,7 @@
         item.innerHTML = `
           <a href="/events/${event._id}">
             <strong>${event.title}</strong>
-            <span>${formatDate(event.startsAt)} · ${event.hall}</span>
+            <span>${formatDate(event.startsAt)} · ${event.hall} · ${formatPrice(event.price)}</span>
           </a>`;
         list.appendChild(item);
       }

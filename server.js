@@ -41,6 +41,7 @@ function reservationResponse(reservation) {
   return {
     reservationId: reservation._id,
     expiresAt: new Date(reservation.expiresAt).toISOString(),
+    amount: reservation.amount,
   };
 }
 
@@ -101,6 +102,7 @@ app.post('/api/reservations', rateLimit, (req, res) => {
     seatId,
     customerName,
     email,
+    amount: event.price,
     expiresAt: now + RESERVATION_MINUTES * 60 * 1000,
     status: 'reserved',
     code: null,

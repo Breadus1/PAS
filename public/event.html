@@ -35,7 +35,8 @@
 
       const { event, takenSeats } = await res.json();
       document.getElementById('title').textContent = event.title;
-      document.getElementById('info').textContent = `${formatDate(event.startsAt)} · ${event.hall}`;
+      document.getElementById('info').textContent =
+        `${formatDate(event.startsAt)} · ${event.hall} · ${formatPrice(event.price)} za fotel`;
 
       const seats = document.getElementById('seats');
       for (const seatId of event.seats) {

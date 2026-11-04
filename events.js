@@ -14,6 +14,7 @@ const events = [
     title: 'Kosmiczna podróż',
     startsAt: '2026-11-21T18:00:00+01:00',
     hall: 'Sala 1',
+    price: 3200,
     seats,
   },
   {
@@ -21,6 +22,7 @@ const events = [
     title: 'Cicha zatoka',
     startsAt: '2026-11-21T20:30:00+01:00',
     hall: 'Sala 2',
+    price: 3200,
     seats,
   },
   {
@@ -28,6 +30,7 @@ const events = [
     title: 'Ostatni seans',
     startsAt: '2026-11-22T17:00:00+01:00',
     hall: 'Sala 1',
+    price: 3200,
     seats,
   },
 ];

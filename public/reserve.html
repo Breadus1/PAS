@@ -51,7 +51,8 @@
       }
 
       document.getElementById('back').href = `/events/${event._id}`;
-      info.textContent = `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(seatId)}`;
+      info.textContent =
+        `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(seatId)} · ${formatPrice(event.price)}`;
       form.hidden = false;
     }
 

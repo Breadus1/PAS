@@ -9,6 +9,14 @@ function formatDate(isoDate) {
   });
 }
 
+function formatPrice(amount) {
+  return (amount / 100).toLocaleString('pl-PL', {
+    style: 'currency',
+    currency: 'PLN',
+    minimumFractionDigits: 0,
+  });
+}
+
 function seatLabel(seatId) {
   return `Rząd ${seatId[0]}, miejsce ${seatId.slice(1)}`;
 }
