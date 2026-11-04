@@ -14,11 +14,19 @@
 
     <section id="pending" hidden>
       <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
+      <button id="buy" class="button">Kupuję bilet</button>
+      <p id="error" class="error"></p>
     </section>
 
     <section id="expired" hidden>
       <p class="error">Rezerwacja wygasła, fotel wrócił do puli.</p>
       <a id="again" href="/">Wybierz fotel jeszcze raz</a>
+    </section>
+
+    <section id="ticket" class="ticket" hidden>
+      <p>Kod biletu</p>
+      <p id="code" class="code"></p>
+      <p>Pokaż ten kod przy wejściu na salę.</p>
     </section>
   </main>
 
@@ -47,6 +55,13 @@
       document.getElementById('timer').textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
+    function showTicket(code) {
+      clearInterval(timer);
+      document.getElementById('title').textContent = 'Twój bilet';
+      document.getElementById('code').textContent = code;
+      show('ticket');
+    }
+
     async function load() {
       const res = await fetch(`/api/reservations/${reservationId}`);
       if (!res.ok) {
@@ -62,10 +77,35 @@
         `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(reservation.seatId)}`;
       document.getElementById('again').href = `/events/${event._id}`;
 
+      if (reservation.status === 'purchased') {
+        showTicket(reservation.code);
+        return;
+      }
+
       show('pending');
       tick();
       timer = setInterval(tick, 1000);
     }
+
+    document.getElementById('buy').onclick = async () => {
+      const button = document.getElementById('buy');
+      const error = document.getElementById('error');
+      button.disabled = true;
+      error.textContent = '';
+
+      const res = await fetch(`/api/reservations/${reservationId}/purchase`, { method: 'POST' });
+      const data = await res.json();
+
+      if (res.ok) {
+        showTicket(data.code);
+      } else if (res.status === 410) {
+        clearInterval(timer);
+        show('expired');
+      } else {
+        error.textContent = data.error;
+        button.disabled = false;
+      }
+    };
 
     load();
   </script>

@@ -122,6 +122,23 @@ app.get('/api/reservations/:id', (req, res) => {
   });
 });
 
+app.post('/api/reservations/:id/purchase', (req, res) => {
+  const reservation = findReservation(req.params.id);
+  if (!reservation) {
+    return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
+  }
+  if (reservation.status === 'purchased') {
+    return res.json({ code: reservation.code });
+  }
+  if (reservation.expiresAt <= Date.now()) {
+    return res.status(410).json({ error: 'Rezerwacja wygasła, fotel wrócił do puli' });
+  }
+
+  reservation.status = 'purchased';
+  reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
+  res.json({ code: reservation.code });
+});
+
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   res.status(status).json({ error: status < 500 ? 'Niepoprawne zapytanie' : 'Błąd serwera' });
