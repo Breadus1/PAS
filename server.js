@@ -19,7 +19,14 @@ function findEvent(id) {
 }
 
 function holdsSeat(reservation, now) {
-  return reservation.status === 'purchased' || reservation.expiresAt > now;
+  return reservation.status === 'paid' || reservation.expiresAt > now;
+}
+
+function statusOf(reservation) {
+  if (reservation.status === 'paid') {
+    return 'paid';
+  }
+  return reservation.expiresAt > Date.now() ? 'held' : 'expired';
 }
 
 function takenSeats(eventId) {
@@ -86,7 +93,7 @@ app.post('/api/reservations', rateLimit, (req, res) => {
 
   if (holder) {
     const sameRequest =
-      holder.status === 'reserved' &&
+      holder.status === 'held' &&
       holder.customerName === customerName &&
       holder.email === email;
 
@@ -104,7 +111,7 @@ app.post('/api/reservations', rateLimit, (req, res) => {
     email,
     amount: event.price,
     expiresAt: now + RESERVATION_MINUTES * 60 * 1000,
-    status: 'reserved',
+    status: 'held',
     code: null,
   };
   reservations.push(reservation);
@@ -121,8 +128,8 @@ app.get('/api/reservations/:id', (req, res) => {
     ...reservationResponse(reservation),
     eventId: reservation.eventId,
     seatId: reservation.seatId,
-    status: reservation.status,
-    code: reservation.code,
+    status: statusOf(reservation),
+    code: reservation.code || undefined,
   });
 });
 
@@ -131,14 +138,14 @@ app.post('/api/reservations/:id/purchase', (req, res) => {
   if (!reservation) {
     return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
   }
-  if (reservation.status === 'purchased') {
+  if (reservation.status === 'paid') {
     return res.json({ code: reservation.code });
   }
   if (reservation.expiresAt <= Date.now()) {
     return res.status(410).json({ error: 'Rezerwacja wygasła, fotel wrócił do puli' });
   }
 
-  reservation.status = 'purchased';
+  reservation.status = 'paid';
   reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
   res.json({ code: reservation.code });
 });
