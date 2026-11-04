@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
 const events = require('./events');
+const rateLimit = require('./rateLimit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,6 +10,7 @@ const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 
 const reservations = [];
 
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -62,7 +64,7 @@ app.get('/api/events/:id', (req, res) => {
   res.json({ event, takenSeats: takenSeats(event._id) });
 });
 
-app.post('/api/reservations', (req, res) => {
+app.post('/api/reservations', rateLimit, (req, res) => {
   const { eventId, seatId, customerName, email } = req.body || {};
 
   const event = findEvent(eventId);
