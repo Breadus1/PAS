@@ -10,7 +10,7 @@ const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 
 const reservations = [];
 
-app.set('trust proxy', 2);
+app.set('trust proxy', 3);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -139,17 +139,6 @@ app.post('/api/reservations/:id/purchase', (req, res) => {
   reservation.status = 'purchased';
   reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
   res.json({ code: reservation.code });
-});
-
-app.get('/api/debug-ip', (req, res) => {
-  res.json({
-    ip: req.ip,
-    ips: req.ips,
-    remote: req.socket.remoteAddress,
-    forwardedFor: req.headers['x-forwarded-for'] || null,
-    cfConnectingIp: req.headers['cf-connecting-ip'] || null,
-    trueClientIp: req.headers['true-client-ip'] || null,
-  });
 });
 
 app.use((err, req, res, next) => {
