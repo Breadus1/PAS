@@ -14,7 +14,7 @@
 
     <section id="pending" hidden>
       <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
-      <button id="buy" class="button">Kupuję bilet</button>
+      <button id="buy" class="button">Zapłać</button>
       <p id="error" class="error"></p>
     </section>
 
@@ -93,11 +93,11 @@
       button.disabled = true;
       error.textContent = '';
 
-      const res = await fetch(`/api/reservations/${reservationId}/purchase`, { method: 'POST' });
+      const res = await fetch(`/api/reservations/${reservationId}/checkout`, { method: 'POST' });
       const data = await res.json();
 
       if (res.ok) {
-        showTicket(data.code);
+        location.href = data.url;
       } else if (res.status === 410) {
         clearInterval(timer);
         show('expired');

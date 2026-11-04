@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const events = require('./events');
 const rateLimit = require('./rateLimit');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'brak-klucza');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,6 +51,31 @@ function reservationResponse(reservation) {
     expiresAt: new Date(reservation.expiresAt).toISOString(),
     amount: reservation.amount,
   };
+}
+
+function createCheckoutSession(reservation, baseUrl) {
+  const event = findEvent(reservation.eventId);
+  const returnUrl = `${baseUrl}/reservations/${reservation._id}`;
+
+  return stripe.checkout.sessions.create({
+    mode: 'payment',
+    payment_method_types: ['card'],
+    client_reference_id: reservation._id,
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: 'pln',
+          unit_amount: reservation.amount,
+          product_data: {
+            name: `${event.title}, ${event.hall}, fotel ${reservation.seatId}`,
+          },
+        },
+      },
+    ],
+    success_url: `${returnUrl}?payment=success`,
+    cancel_url: `${returnUrl}?payment=cancelled`,
+  });
 }
 
 function page(file) {
@@ -113,6 +139,7 @@ app.post('/api/reservations', rateLimit, (req, res) => {
     expiresAt: now + RESERVATION_MINUTES * 60 * 1000,
     status: 'held',
     code: null,
+    checkout: null,
   };
   reservations.push(reservation);
 
@@ -133,21 +160,30 @@ app.get('/api/reservations/:id', (req, res) => {
   });
 });
 
-app.post('/api/reservations/:id/purchase', (req, res) => {
+app.post('/api/reservations/:id/checkout', async (req, res) => {
   const reservation = findReservation(req.params.id);
   if (!reservation) {
     return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
   }
   if (reservation.status === 'paid') {
-    return res.json({ code: reservation.code });
+    return res.status(409).json({ error: 'Rezerwacja jest już opłacona' });
   }
   if (reservation.expiresAt <= Date.now()) {
     return res.status(410).json({ error: 'Rezerwacja wygasła, fotel wrócił do puli' });
   }
 
-  reservation.status = 'paid';
-  reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
-  res.json({ code: reservation.code });
+  if (!reservation.checkout) {
+    reservation.checkout = createCheckoutSession(reservation, `${req.protocol}://${req.get('host')}`);
+  }
+
+  try {
+    const session = await reservation.checkout;
+    res.json({ url: session.url });
+  } catch (err) {
+    reservation.checkout = null;
+    console.error('Stripe:', err.message);
+    res.status(503).json({ error: 'Płatności chwilowo nie działają, spróbuj za chwilę' });
+  }
 });
 
 app.use((err, req, res, next) => {
