@@ -33,6 +33,14 @@ const events = [
     price: 3200,
     seats,
   },
+  {
+    _id: 'waitlist-test',
+    title: 'Pokaz testowy listy oczekujących',
+    startsAt: '2026-11-23T19:00:00+01:00',
+    hall: 'Sala 3',
+    price: 3200,
+    seats: ['A1', 'A2'],
+  },
 ];
 
 module.exports = events;

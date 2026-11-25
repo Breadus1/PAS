@@ -27,8 +27,8 @@ function statusOf(reservation) {
   return reservation.expires_at > new Date() ? 'held' : 'expired';
 }
 
-async function takenSeats(eventId) {
-  const { rows } = await db.query(
+async function takenSeats(eventId, client = db) {
+  const { rows } = await client.query(
     "SELECT seat_id FROM reservations WHERE event_id = $1 AND (status = 'paid' OR expires_at > $2)",
     [eventId, new Date()]
   );
@@ -264,7 +264,8 @@ app.get('/api/events/:id', async (req, res) => {
   if (!event) {
     return res.status(404).json({ error: 'Nie ma takiego seansu' });
   }
-  res.json({ event, takenSeats: await takenSeats(event._id) });
+  const taken = await takenSeats(event._id);
+  res.json({ event, takenSeats: taken, soldOut: taken.length === event.seats.length });
 });
 
 app.get('/api/loyalty', loyaltyLimit, async (req, res) => {
