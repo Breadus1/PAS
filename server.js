@@ -3,13 +3,12 @@ const path = require('path');
 const crypto = require('crypto');
 const events = require('./events');
 const rateLimit = require('./rateLimit');
+const db = require('./db');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'brak-klucza');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
-
-const reservations = [];
 
 app.set('trust proxy', 3);
 
@@ -17,26 +16,28 @@ function findEvent(id) {
   return events.find((event) => event._id === id);
 }
 
-function holdsSeat(reservation, now) {
-  return reservation.status === 'paid' || reservation.expiresAt > now;
-}
-
 function statusOf(reservation) {
   if (reservation.status === 'paid') {
     return 'paid';
   }
-  return reservation.expiresAt > Date.now() ? 'held' : 'expired';
+  return reservation.expires_at > new Date() ? 'held' : 'expired';
 }
 
-function takenSeats(eventId) {
-  const now = Date.now();
-  return reservations
-    .filter((r) => r.eventId === eventId && holdsSeat(r, now))
-    .map((r) => r.seatId);
+async function takenSeats(eventId) {
+  const { rows } = await db.query(
+    "SELECT seat_id FROM reservations WHERE event_id = $1 AND (status = 'paid' OR expires_at > $2)",
+    [eventId, new Date()]
+  );
+  return rows.map((row) => row.seat_id);
 }
 
-function findReservation(id) {
-  return reservations.find((reservation) => reservation._id === id);
+async function findReservation(id) {
+  const { rows } = await db.query('SELECT * FROM reservations WHERE id = $1', [id]);
+  return rows[0];
+}
+
+function lockSeat(client, eventId, seatId) {
+  return db.lock(client, `fotel:${eventId}:${seatId}`);
 }
 
 function isFilled(value) {
@@ -45,19 +46,19 @@ function isFilled(value) {
 
 function reservationResponse(reservation) {
   return {
-    reservationId: reservation._id,
-    expiresAt: new Date(reservation.expiresAt).toISOString(),
+    reservationId: reservation.id,
+    expiresAt: reservation.expires_at.toISOString(),
     amount: reservation.amount,
   };
 }
 
 function createCheckoutSession(reservation, baseUrl) {
-  const event = findEvent(reservation.eventId);
-  const returnUrl = `${baseUrl}/reservations/${reservation._id}`;
+  const event = findEvent(reservation.event_id);
+  const returnUrl = `${baseUrl}/reservations/${reservation.id}`;
 
   return stripe.checkout.sessions.create({
     mode: 'payment',
-    client_reference_id: reservation._id,
+    client_reference_id: reservation.id,
     line_items: [
       {
         quantity: 1,
@@ -65,7 +66,7 @@ function createCheckoutSession(reservation, baseUrl) {
           currency: 'pln',
           unit_amount: reservation.amount,
           product_data: {
-            name: `${event.title}, ${event.hall}, fotel ${reservation.seatId}`,
+            name: `${event.title}, ${event.hall}, fotel ${reservation.seat_id}`,
           },
         },
       },
@@ -75,21 +76,34 @@ function createCheckoutSession(reservation, baseUrl) {
   });
 }
 
-async function handlePayment(reservation, session) {
-  if (reservation.status === 'paid') {
+async function handlePayment(reservationId, session) {
+  const reservation = await findReservation(reservationId);
+  if (!reservation) {
     return;
   }
 
-  if (reservation.expiresAt > Date.now()) {
-    reservation.status = 'paid';
-    reservation.code = crypto.randomBytes(4).toString('hex').toUpperCase();
-    return;
-  }
+  const paidInTime = await db.transaction(async (client) => {
+    await lockSeat(client, reservation.event_id, reservation.seat_id);
+    const { rows } = await client.query('SELECT * FROM reservations WHERE id = $1 FOR UPDATE', [reservationId]);
+    const current = rows[0];
 
-  await stripe.refunds.create(
-    { payment_intent: session.payment_intent },
-    { idempotencyKey: `refund-${session.id}` }
-  );
+    if (current.status === 'paid') {
+      return true;
+    }
+    if (current.expires_at > new Date()) {
+      const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+      await client.query("UPDATE reservations SET status = 'paid', code = $2 WHERE id = $1", [reservationId, code]);
+      return true;
+    }
+    return false;
+  });
+
+  if (!paidInTime) {
+    await stripe.refunds.create(
+      { payment_intent: session.payment_intent },
+      { idempotencyKey: `refund-${session.id}` }
+    );
+  }
 }
 
 function page(file) {
@@ -114,9 +128,8 @@ app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyn
     const session = event.data.object;
     console.log(`Webhook: ${session.payment_status}, rezerwacja ${session.client_reference_id}`);
 
-    const reservation = findReservation(session.client_reference_id);
-    if (reservation && session.payment_status === 'paid') {
-      await handlePayment(reservation, session);
+    if (session.client_reference_id && session.payment_status === 'paid') {
+      await handlePayment(session.client_reference_id, session);
     }
   }
 
@@ -134,15 +147,15 @@ app.get('/api/events', (req, res) => {
   res.json(events);
 });
 
-app.get('/api/events/:id', (req, res) => {
+app.get('/api/events/:id', async (req, res) => {
   const event = findEvent(req.params.id);
   if (!event) {
     return res.status(404).json({ error: 'Nie ma takiego seansu' });
   }
-  res.json({ event, takenSeats: takenSeats(event._id) });
+  res.json({ event, takenSeats: await takenSeats(event._id) });
 });
 
-app.post('/api/reservations', rateLimit, (req, res) => {
+app.post('/api/reservations', rateLimit, async (req, res) => {
   const { eventId, seatId, customerName, email } = req.body || {};
 
   const event = findEvent(eventId);
@@ -156,78 +169,89 @@ app.post('/api/reservations', rateLimit, (req, res) => {
     return res.status(400).json({ error: 'Podaj imię i poprawny e-mail' });
   }
 
-  const now = Date.now();
-  const holder = reservations.find(
-    (r) => r.eventId === eventId && r.seatId === seatId && holdsSeat(r, now)
-  );
+  const result = await db.transaction(async (client) => {
+    await lockSeat(client, eventId, seatId);
 
-  if (holder) {
-    const sameRequest =
-      holder.status === 'held' &&
-      holder.customerName === customerName &&
-      holder.email === email;
+    const now = new Date();
+    const { rows } = await client.query(
+      "SELECT * FROM reservations WHERE event_id = $1 AND seat_id = $2 AND (status = 'paid' OR expires_at > $3)",
+      [eventId, seatId, now]
+    );
+    const holder = rows[0];
 
-    if (sameRequest) {
-      return res.status(200).json(reservationResponse(holder));
+    if (holder) {
+      const sameRequest =
+        holder.status === 'held' &&
+        holder.customer_name === customerName &&
+        holder.email === email;
+
+      return sameRequest ? { status: 200, reservation: holder } : { status: 409 };
     }
+
+    const expiresAt = new Date(now.getTime() + RESERVATION_MINUTES * 60 * 1000);
+    const inserted = await client.query(
+      `INSERT INTO reservations (id, event_id, seat_id, customer_name, email, amount, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [crypto.randomUUID(), eventId, seatId, customerName, email, event.price, expiresAt]
+    );
+    return { status: 201, reservation: inserted.rows[0] };
+  });
+
+  if (result.status === 409) {
     return res.status(409).json({ error: 'Ten fotel jest już zajęty' });
   }
-
-  const reservation = {
-    _id: crypto.randomUUID(),
-    eventId,
-    seatId,
-    customerName,
-    email,
-    amount: event.price,
-    expiresAt: now + RESERVATION_MINUTES * 60 * 1000,
-    status: 'held',
-    code: null,
-    checkout: null,
-  };
-  reservations.push(reservation);
-
-  res.status(201).json(reservationResponse(reservation));
+  res.status(result.status).json(reservationResponse(result.reservation));
 });
 
-app.get('/api/reservations/:id', (req, res) => {
-  const reservation = findReservation(req.params.id);
+app.get('/api/reservations/:id', async (req, res) => {
+  const reservation = await findReservation(req.params.id);
   if (!reservation) {
     return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
   }
   res.json({
     ...reservationResponse(reservation),
-    eventId: reservation.eventId,
-    seatId: reservation.seatId,
+    eventId: reservation.event_id,
+    seatId: reservation.seat_id,
     status: statusOf(reservation),
     code: reservation.code || undefined,
   });
 });
 
 app.post('/api/reservations/:id/checkout', async (req, res) => {
-  const reservation = findReservation(req.params.id);
-  if (!reservation) {
-    return res.status(404).json({ error: 'Nie ma takiej rezerwacji' });
-  }
-  if (reservation.status === 'paid') {
-    return res.status(409).json({ error: 'Rezerwacja jest już opłacona' });
-  }
-  if (reservation.expiresAt <= Date.now()) {
-    return res.status(410).json({ error: 'Rezerwacja wygasła, fotel wrócił do puli' });
-  }
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
 
-  if (!reservation.checkout) {
-    reservation.checkout = createCheckoutSession(reservation, `${req.protocol}://${req.get('host')}`);
-  }
-
+  let result;
   try {
-    const session = await reservation.checkout;
-    res.json({ url: session.url });
+    result = await db.transaction(async (client) => {
+      const { rows } = await client.query('SELECT * FROM reservations WHERE id = $1 FOR UPDATE', [req.params.id]);
+      const reservation = rows[0];
+
+      if (!reservation) {
+        return { status: 404, error: 'Nie ma takiej rezerwacji' };
+      }
+      if (reservation.status === 'paid') {
+        return { status: 409, error: 'Rezerwacja jest już opłacona' };
+      }
+      if (reservation.expires_at <= new Date()) {
+        return { status: 410, error: 'Rezerwacja wygasła, fotel wrócił do puli' };
+      }
+
+      if (!reservation.checkout_url) {
+        const session = await createCheckoutSession(reservation, baseUrl);
+        reservation.checkout_url = session.url;
+        await client.query('UPDATE reservations SET checkout_url = $2 WHERE id = $1', [reservation.id, session.url]);
+      }
+      return { status: 200, url: reservation.checkout_url };
+    });
   } catch (err) {
-    reservation.checkout = null;
-    console.error('Stripe:', err.message);
-    res.status(503).json({ error: 'Płatności chwilowo nie działają, spróbuj za chwilę' });
+    console.error('Checkout:', err.message);
+    return res.status(503).json({ error: 'Płatności chwilowo nie działają, spróbuj za chwilę' });
   }
+
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  res.json({ url: result.url });
 });
 
 app.use((err, req, res, next) => {
@@ -238,6 +262,13 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: status < 500 ? 'Niepoprawne zapytanie' : 'Błąd serwera' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Serwer działa na http://localhost:${PORT}`);
+if (!process.env.DATABASE_URL) {
+  console.error('Brak zmiennej DATABASE_URL z adresem bazy Postgres');
+  process.exit(1);
+}
+
+db.init().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Serwer działa na http://localhost:${PORT}`);
+  });
 });

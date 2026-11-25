@@ -17,6 +17,7 @@ Strona: http://localhost:3000
 
 | Zmienna | Opis |
 |---|---|
+| `DATABASE_URL` | adres bazy Postgres (np. Neon), wymagany; tabele zakładają się same przy starcie |
 | `RESERVATION_MINUTES` | czas ważności rezerwacji, domyślnie 15, w testach 2 |
 | `STRIPE_SECRET_KEY` | klucz testowy Stripe (`sk_test_…`) |
 | `STRIPE_WEBHOOK_SECRET` | sekret podpisu webhooka (`whsec_…`) |
