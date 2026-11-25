@@ -2,6 +2,8 @@
 
 Kasa biletowa kina (PAS S01). Klient wybiera seans i fotel, rezerwuje go na 15 minut, płaci kartą przez Stripe Checkout i dostaje bilet z kodem.
 
+**Wdrożenie:** https://kinobilet.onrender.com (Render, tryb testowy: rezerwacja na 2 minuty). Darmowy serwer usypia po 15 minutach bez ruchu, więc pierwsze zapytanie po przerwie trwa około minuty.
+
 ## Uruchomienie
 
 ```
