@@ -185,7 +185,7 @@ async function sendTicketEmail(reservationId) {
   }
 }
 
-const pausedUntil = { punkty: 0, mail: 0 };
+const pausedUntil = { punkty: 0, mail: 0, lista: 0 };
 
 async function retry(kind, sql, params, work) {
   if (Date.now() < pausedUntil[kind]) {
@@ -204,6 +204,7 @@ async function retry(kind, sql, params, work) {
 }
 
 async function settle() {
+  await retry('lista', "SELECT DISTINCT event_id AS id FROM waitlist WHERE status = 'waiting'", [], offerFreeSeats);
   await retry(
     'punkty',
     "SELECT id FROM reservations WHERE status = 'held' AND expires_at <= $1 AND points_used > 0 AND NOT points_returned",
@@ -247,6 +248,75 @@ async function waitlistView(entry) {
   }
 
   return view;
+}
+
+async function offerFreeSeats(eventId) {
+  const event = findEvent(eventId);
+
+  return db.transaction(async (client) => {
+    await db.lock(client, `lista:${eventId}`);
+
+    const { rows: queue } = await client.query(
+      "SELECT * FROM waitlist WHERE event_id = $1 AND status = 'waiting' ORDER BY seq",
+      [eventId]
+    );
+    if (queue.length === 0) {
+      return [];
+    }
+
+    const taken = await takenSeats(eventId, client);
+    const free = event.seats.filter((seatId) => !taken.includes(seatId));
+    const expiresAt = new Date(Date.now() + RESERVATION_MINUTES * 60 * 1000);
+    const offered = [];
+
+    for (const seatId of free) {
+      const entry = queue[offered.length];
+      if (!entry) {
+        break;
+      }
+
+      await lockSeat(client, eventId, seatId);
+      const holder = await client.query(
+        "SELECT 1 FROM reservations WHERE event_id = $1 AND seat_id = $2 AND (status = 'paid' OR expires_at > $3)",
+        [eventId, seatId, new Date()]
+      );
+      if (holder.rows[0]) {
+        continue;
+      }
+
+      const reservationId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO reservations (id, event_id, seat_id, customer_name, email, amount, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [reservationId, eventId, seatId, entry.customer_name, entry.email, event.price, expiresAt]
+      );
+      await client.query(
+        "UPDATE waitlist SET status = 'offered', reservation_id = $2 WHERE id = $1",
+        [entry.id, reservationId]
+      );
+      offered.push(entry.id);
+    }
+
+    return offered;
+  });
+}
+
+async function cancelOffer(client, reservationId) {
+  const found = await client.query('SELECT * FROM reservations WHERE id = $1', [reservationId]);
+  const reservation = found.rows[0];
+  await lockSeat(client, reservation.event_id, reservation.seat_id);
+
+  const { rows } = await client.query('SELECT * FROM reservations WHERE id = $1 FOR UPDATE', [reservationId]);
+  const now = new Date();
+  if (rows[0].status === 'paid') {
+    return 'paid';
+  }
+  if (rows[0].expires_at <= now) {
+    return 'expired';
+  }
+
+  await client.query('UPDATE reservations SET expires_at = $2 WHERE id = $1', [reservationId, now]);
+  return 'cancelled';
 }
 
 function page(file) {
@@ -361,11 +431,32 @@ app.delete('/api/waitlist/:id', async (req, res) => {
     return res.status(404).json({ error: 'Nie ma takiego zapisu na liście' });
   }
 
-  await db.transaction(async (client) => {
+  const outcome = await db.transaction(async (client) => {
     await db.lock(client, `lista:${found.event_id}`);
-    await client.query("UPDATE waitlist SET status = 'left' WHERE id = $1 AND status = 'waiting'", [found.id]);
+    const { rows } = await client.query('SELECT * FROM waitlist WHERE id = $1', [found.id]);
+    const entry = rows[0];
+
+    if (entry.status === 'waiting') {
+      await client.query("UPDATE waitlist SET status = 'left' WHERE id = $1", [entry.id]);
+      return 'left';
+    }
+    if (entry.status !== 'offered') {
+      return entry.status;
+    }
+
+    const result = await cancelOffer(client, entry.reservation_id);
+    if (result === 'cancelled') {
+      await client.query("UPDATE waitlist SET status = 'left' WHERE id = $1", [entry.id]);
+    }
+    return result;
   });
 
+  if (outcome === 'paid') {
+    return res.status(409).json({ error: 'Bilet jest już kupiony, nie można się wypisać' });
+  }
+  if (outcome === 'cancelled') {
+    await offerFreeSeats(found.event_id).catch((err) => console.error('Lista oczekujących:', err.message));
+  }
   res.json(await waitlistView(await findWaitlistEntry(found.id)));
 });
 
@@ -414,7 +505,17 @@ app.post('/api/reservations', reservationLimit, async (req, res) => {
         holder.customer_name === customerName &&
         holder.email === email;
 
-      return sameRequest ? { status: 200, reservation: holder } : { status: 409 };
+      return sameRequest
+        ? { status: 200, reservation: holder }
+        : { status: 409, error: 'Ten fotel jest już zajęty' };
+    }
+
+    const queue = await client.query(
+      "SELECT 1 FROM waitlist WHERE event_id = $1 AND status = 'waiting' LIMIT 1",
+      [eventId]
+    );
+    if (queue.rows[0]) {
+      return { status: 409, error: 'Zwolnione miejsca dostają najpierw osoby z listy oczekujących' };
     }
 
     const expiresAt = new Date(now.getTime() + RESERVATION_MINUTES * 60 * 1000);
@@ -426,8 +527,8 @@ app.post('/api/reservations', reservationLimit, async (req, res) => {
     return { status: 201, reservation: inserted.rows[0] };
   });
 
-  if (result.status === 409) {
-    return res.status(409).json({ error: 'Ten fotel jest już zajęty' });
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
   }
   res.status(result.status).json(reservationResponse(result.reservation));
 });
