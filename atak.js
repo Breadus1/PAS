@@ -69,8 +69,12 @@ async function main() {
     request('POST', '/api/reservations', { eventId: event._id, seatId, ...person(n) }, headers);
   const checkout = (id, body) => request('POST', `/api/reservations/${id}/checkout`, body);
   const status = async (id) => (await request('GET', `/api/reservations/${id}`)).data;
-  const reserveAs = (seatId, email) =>
-    request('POST', '/api/reservations', { eventId: event._id, seatId, customerName: 'Atak', email });
+  const reserveOn = (eventId, seatId, email) =>
+    request('POST', '/api/reservations', { eventId, seatId, customerName: 'Atak', email });
+  const reserveAs = (seatId, email) => reserveOn(event._id, seatId, email);
+  const joinWaitlist = (eventId, email) =>
+    request('POST', `/api/events/${eventId}/waitlist`, { customerName: 'Atak', email });
+  const waitlistOf = async (id) => (await request('GET', `/api/waitlist/${id}`)).data;
   const loyaltyOf = (email) => request('GET', `/api/loyalty?email=${encodeURIComponent(email)}`);
   const pointsOf = async (email) => (await loyaltyOf(email)).data.points;
   const tag = Date.now();
@@ -206,6 +210,35 @@ async function main() {
     await checkout(idExpirePts, { points: 500 });
   }
 
+  const W = 'waitlist-test';
+  const waitlistIds = [];
+  const wlStart = (await request('GET', `/api/events/${W}`)).data;
+  if (!wlStart || wlStart.takenSeats.length > 0) {
+    skip('IV  lista oczekujących', `waitlist-test ma zajęte miejsca: ${wlStart && wlStart.takenSeats}`);
+  } else {
+    await reserveOn(W, 'A1', `delivered+wl1${tag}@resend.dev`);
+    await reserveOn(W, 'A2', `delivered+wl2${tag}@resend.dev`);
+    const sold = (await request('GET', `/api/events/${W}`)).data;
+    check('IV  soldOut po zajęciu obu miejsc', sold.soldOut === true, JSON.stringify(sold.takenSeats));
+
+    const notSold = await joinWaitlist(event._id, `delivered+nie${tag}@resend.dev`);
+    check('IV  zapis na niewyprzedany seans → 4xx', is4xx(notSold), notSold.status);
+
+    const emails = ['bounced@resend.dev', `delivered+w2${tag}@resend.dev`, `delivered+w3${tag}@resend.dev`, `delivered+w4${tag}@resend.dev`];
+    const joins = [];
+    for (const email of emails) {
+      joins.push((await joinWaitlist(W, email)).data);
+    }
+    waitlistIds.push(...joins.map((j) => j.waitlistId));
+    check('IV  pozycje w kolejce 1–4', joins.map((j) => j.position).join(',') === '1,2,3,4', joins.map((j) => j.position).join(','));
+
+    const again = await joinWaitlist(W, emails[1]);
+    check('IV  ponowny zapis tym samym e-mailem → ten sam wpis', again.ok && again.data.waitlistId === waitlistIds[1], again.status);
+
+    const left = await request('DELETE', `/api/waitlist/${waitlistIds[2]}`);
+    check('IV  wypisanie z kolejki', left.ok && left.data.status === 'left', left.status);
+  }
+
   if (WEBHOOK_SECRET) {
     await sendWebhook(rPaid.data.reservationId);
   }
@@ -255,6 +288,34 @@ async function main() {
     check('III wygasła rezerwacja oddaje punkty (1000)', returned === 1000, returned);
   }
 
+  if (waitlistIds.length) {
+    const first = await waitlistOf(waitlistIds[0]);
+    const second = await waitlistOf(waitlistIds[1]);
+    check(
+      'IV  zwolnione miejsca dostają dwie pierwsze osoby z kolejki',
+      ['offered', 'missed'].includes(first.status) && second.status === 'offered' && second.reservationId && second.offerExpiresAt,
+      `${first.status}, ${second.status}`
+    );
+    const offer = await status(second.reservationId);
+    check('IV  miejsce z listy to zwykła rezerwacja', offer.status === 'held', offer.status);
+
+    if (BASE.includes('localhost')) {
+      skip('IV  odbity mail → miejsce dla następnej osoby', 'lokalnie Resend nie wysyła webhooków');
+    } else {
+      let bounced = first.status === 'missed';
+      for (let i = 0; i < 6 && !bounced; i++) {
+        await sleep(5000);
+        bounced = (await waitlistOf(waitlistIds[0])).status === 'missed';
+      }
+      const next = await waitlistOf(waitlistIds[3]);
+      check('IV  odbity mail (bounced@resend.dev) → miejsce dla następnej osoby', bounced && next.status === 'offered', `pierwszy: ${bounced ? 'missed' : 'brak odbicia'}, następny: ${next.status}; potrzebny webhook Resenda`);
+    }
+
+    for (const id of waitlistIds) {
+      await request('DELETE', `/api/waitlist/${id}`);
+    }
+  }
+
   const spamSeats = events.slice(1).flatMap((e) => e.seats.map((seatId) => ({ eventId: e._id, seatId }))).slice(0, 100);
   const spam = spamSeats.map((seat, i) =>
     request('POST', '/api/reservations', { ...seat, ...person(500 + i) }, { 'X-Forwarded-For': '10.0.0.1' })
@@ -266,6 +327,12 @@ async function main() {
   const limited = spamResults.filter((r) => r.status === 429);
   check('B5  limit: 429 z Retry-After', limited.length > 0 && limited.every((r) => r.retryAfter), `${limited.length}× 429`);
   check('B5  drugi klient rezerwuje bez problemu', otherResult.ok, `${otherResult.status}; na serwerze w sieci sprawdź z telefonu`);
+
+  const loyaltySpam = await Promise.all(Array.from({ length: 25 }, () =>
+    request('GET', `/api/loyalty?email=${encodeURIComponent(loyaltyEmail)}`, undefined, { 'X-Forwarded-For': '10.0.0.3' })
+  ));
+  const loyaltyLimited = loyaltySpam.filter((r) => r.status === 429);
+  check('III.A3 limit zapytań o saldo: 429 z Retry-After', loyaltyLimited.length > 0 && loyaltyLimited.every((r) => r.retryAfter), `${loyaltyLimited.length}× 429`);
 
   console.log(failures === 0 ? '\nWszystko OK' : `\nProblemy: ${failures}`);
 }
