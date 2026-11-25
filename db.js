@@ -22,6 +22,12 @@ async function init() {
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS reservations_seat ON reservations (event_id, seat_id)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS loyalty_members (
+      email TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL
+    )
+  `);
 }
 
 function query(text, params) {

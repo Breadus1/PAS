@@ -21,6 +21,9 @@ Strona: http://localhost:3000
 | `RESERVATION_MINUTES` | czas ważności rezerwacji, domyślnie 15, w testach 2 |
 | `STRIPE_SECRET_KEY` | klucz testowy Stripe (`sk_test_…`) |
 | `STRIPE_WEBHOOK_SECRET` | sekret podpisu webhooka (`whsec_…`) |
+| `VOUCHERIFY_APP_ID`, `VOUCHERIFY_SECRET_KEY` | klucze projektu Sandbox w Voucherify (Project settings → Application keys) |
+| `VOUCHERIFY_CAMPAIGN_ID` | id kampanii lojalnościowej (`camp_…`) |
+| `VOUCHERIFY_API_URL` | adres API Voucherify, domyślnie `https://api.voucherify.io` (inny klaster np. `https://us1.api.voucherify.io`) |
 
 Klucze są tylko w zmiennych środowiskowych na serwerze, nigdy w repozytorium.
 
@@ -36,6 +39,7 @@ W PowerShellu: `$env:RESERVATION_MINUTES=2; npm start`
 | GET | `/api/reservations/:id` | `{ status, amount, expiresAt, code? }`, status: `held`, `paid`, `expired` |
 | POST | `/api/reservations/:id/checkout` | `{ url }` strony płatności Stripe |
 | POST | `/api/webhooks/stripe` | zdarzenia od Stripe, m.in. `checkout.session.completed` |
+| GET | `/api/loyalty?email=…` | `{ email, points }`, saldo z Voucherify; nowy klient ma 1000 punktów |
 
 Body rezerwacji: `{ eventId, seatId, customerName, email }`, np. `seatId: "F7"`.
 

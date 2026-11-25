@@ -22,6 +22,7 @@
         E-mail
         <input name="email" type="email" required>
       </label>
+      <p id="points" class="hint"></p>
       <button type="submit">Zarezerwuj</button>
       <p id="error" class="error"></p>
     </form>
@@ -55,6 +56,20 @@
         `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${seatLabel(seatId)} · ${formatPrice(event.price)}`;
       form.hidden = false;
     }
+
+    form.email.onchange = async () => {
+      const points = document.getElementById('points');
+      points.textContent = '';
+      if (!form.email.checkValidity()) {
+        return;
+      }
+
+      const res = await fetch(`/api/loyalty?email=${encodeURIComponent(form.email.value)}`);
+      if (res.ok) {
+        const data = await res.json();
+        points.textContent = `Masz ${data.points} punktów (${formatPrice(data.points)}). Punktami zapłacisz do połowy ceny biletu.`;
+      }
+    };
 
     form.onsubmit = async (e) => {
       e.preventDefault();

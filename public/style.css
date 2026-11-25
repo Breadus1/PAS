@@ -134,6 +134,11 @@ button:disabled {
   color: #c62828;
 }
 
+.hint {
+  margin: 0;
+  color: #666;
+}
+
 .ticket {
   padding: 16px;
   background: #fff;

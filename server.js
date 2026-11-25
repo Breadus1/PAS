@@ -4,11 +4,14 @@ const crypto = require('crypto');
 const events = require('./events');
 const rateLimit = require('./rateLimit');
 const db = require('./db');
+const loyalty = require('./loyalty');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'brak-klucza');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
+const reservationLimit = rateLimit(30, 10 * 1000);
+const loyaltyLimit = rateLimit(20, 60 * 1000);
 
 app.set('trust proxy', 3);
 
@@ -155,7 +158,22 @@ app.get('/api/events/:id', async (req, res) => {
   res.json({ event, takenSeats: await takenSeats(event._id) });
 });
 
-app.post('/api/reservations', rateLimit, async (req, res) => {
+app.get('/api/loyalty', loyaltyLimit, async (req, res) => {
+  const email = String(req.query.email || '').trim().replace(/ /g, '+');
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'Podaj poprawny e-mail' });
+  }
+
+  try {
+    const points = await loyalty.getBalance(db, email);
+    res.json({ email: loyalty.normalize(email), points });
+  } catch (err) {
+    console.error('Loyalty:', err.message);
+    res.status(503).json({ error: 'Program punktowy chwilowo nie działa, spróbuj za chwilę' });
+  }
+});
+
+app.post('/api/reservations', reservationLimit, async (req, res) => {
   const { eventId, seatId, customerName, email } = req.body || {};
 
   const event = findEvent(eventId);

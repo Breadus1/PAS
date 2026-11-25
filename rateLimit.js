@@ -1,26 +1,25 @@
-const LIMIT = 30;
-const WINDOW_MS = 10 * 1000;
+function rateLimit(limit, windowMs) {
+  const clients = new Map();
 
-const clients = new Map();
+  return (req, res, next) => {
+    const now = Date.now();
+    let client = clients.get(req.ip);
 
-function rateLimit(req, res, next) {
-  const now = Date.now();
-  let client = clients.get(req.ip);
+    if (!client || now >= client.resetAt) {
+      client = { count: 0, resetAt: now + windowMs };
+      clients.set(req.ip, client);
+    }
 
-  if (!client || now >= client.resetAt) {
-    client = { count: 0, resetAt: now + WINDOW_MS };
-    clients.set(req.ip, client);
-  }
+    client.count++;
 
-  client.count++;
+    if (client.count > limit) {
+      const seconds = Math.ceil((client.resetAt - now) / 1000);
+      res.set('Retry-After', String(seconds));
+      return res.status(429).json({ error: 'Za dużo zapytań, spróbuj za chwilę' });
+    }
 
-  if (client.count > LIMIT) {
-    const seconds = Math.ceil((client.resetAt - now) / 1000);
-    res.set('Retry-After', String(seconds));
-    return res.status(429).json({ error: 'Za dużo rezerwacji, spróbuj za chwilę' });
-  }
-
-  next();
+    next();
+  };
 }
 
 module.exports = rateLimit;
