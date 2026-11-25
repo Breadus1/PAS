@@ -197,7 +197,7 @@ async function retry(kind, sql, params, work) {
       await work(row.id);
     }
   } catch (err) {
-    pausedUntil[kind] = Date.now() + 30 * 1000;
+    pausedUntil[kind] = Date.now() + 60 * 1000;
     console.error(`Ponowienie (${kind}):`, err.message);
   }
 }

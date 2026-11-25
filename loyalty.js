@@ -55,13 +55,14 @@ async function findCard(db, email) {
   return card || null;
 }
 
-async function createCard(db, email) {
+async function createCard(db, email, extraPoints) {
   const card = await voucherify('POST', `/v1/loyalties/${CAMPAIGN_ID}/members`, {
     customer: { source_id: email, email },
   });
 
-  if (card.loyalty_card.balance === 0) {
-    const result = await adjust(card.code, WELCOME_POINTS);
+  const bonus = card.loyalty_card.balance === 0 ? WELCOME_POINTS + extraPoints : extraPoints;
+  if (bonus !== 0) {
+    const result = await adjust(card.code, bonus);
     card.loyalty_card.balance = result.balance;
   }
 
@@ -76,7 +77,7 @@ async function getBalance(db, email) {
 
 async function spendPoints(db, email, points) {
   const customer = normalize(email);
-  const card = (await findCard(db, customer)) || (await createCard(db, customer));
+  const card = (await findCard(db, customer)) || (await createCard(db, customer, 0));
   if (card.loyalty_card.balance < points) {
     return false;
   }
@@ -86,8 +87,12 @@ async function spendPoints(db, email, points) {
 
 async function addPoints(db, email, points) {
   const customer = normalize(email);
-  const code = (await savedCode(db, customer)) || ((await findCard(db, customer)) || (await createCard(db, customer))).code;
-  await adjust(code, points);
+  const code = (await savedCode(db, customer)) || ((await findCard(db, customer)) || {}).code;
+  if (code) {
+    await adjust(code, points);
+  } else {
+    await createCard(db, customer, points);
+  }
 }
 
 module.exports = { getBalance, spendPoints, addPoints, normalize };
