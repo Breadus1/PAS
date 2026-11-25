@@ -28,52 +28,66 @@ function normalize(email) {
   return email.trim().toLowerCase();
 }
 
-async function findMember(db, email) {
+async function savedCode(db, email) {
   const { rows } = await db.query('SELECT member_id FROM loyalty_members WHERE email = $1', [email]);
-  if (rows[0]) {
-    return rows[0].member_id;
+  return rows[0] ? rows[0].member_id : null;
+}
+
+function saveCode(db, email, code) {
+  return db.query('INSERT INTO loyalty_members (email, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [email, code]);
+}
+
+function adjust(code, points) {
+  return voucherify('POST', `/v1/loyalties/members/${encodeURIComponent(code)}/balance`, { points });
+}
+
+async function findCard(db, email) {
+  const code = await savedCode(db, email);
+  if (code) {
+    return voucherify('GET', `/v1/loyalties/members/${encodeURIComponent(code)}`);
   }
 
   const list = await voucherify('GET', `/v1/loyalties/${CAMPAIGN_ID}/members?customer=${encodeURIComponent(email)}`);
   const card = list.vouchers[0];
-  if (!card) {
-    return null;
+  if (card) {
+    await saveCode(db, email, card.code);
   }
-
-  await db.query('INSERT INTO loyalty_members (email, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [email, card.code]);
-  return card.code;
+  return card || null;
 }
 
-async function createMember(db, email) {
+async function createCard(db, email) {
   const card = await voucherify('POST', `/v1/loyalties/${CAMPAIGN_ID}/members`, {
     customer: { source_id: email, email },
   });
 
   if (card.loyalty_card.balance === 0) {
-    await voucherify('POST', `/v1/loyalties/members/${encodeURIComponent(card.code)}/balance`, {
-      points: WELCOME_POINTS,
-    });
+    const result = await adjust(card.code, WELCOME_POINTS);
+    card.loyalty_card.balance = result.balance;
   }
 
-  await db.query('INSERT INTO loyalty_members (email, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [email, card.code]);
-  return card.code;
+  await saveCode(db, email, card.code);
+  return card;
 }
 
 async function getBalance(db, email) {
-  const memberId = await findMember(db, normalize(email));
-  if (!memberId) {
-    return WELCOME_POINTS;
-  }
-
-  const card = await voucherify('GET', `/v1/loyalties/members/${encodeURIComponent(memberId)}`);
-  return card.loyalty_card.balance;
+  const card = await findCard(db, normalize(email));
+  return card ? card.loyalty_card.balance : WELCOME_POINTS;
 }
 
-async function changePoints(db, email, points) {
+async function spendPoints(db, email, points) {
   const customer = normalize(email);
-  const memberId = (await findMember(db, customer)) || (await createMember(db, customer));
-  const result = await voucherify('POST', `/v1/loyalties/members/${encodeURIComponent(memberId)}/balance`, { points });
-  return result.balance;
+  const card = (await findCard(db, customer)) || (await createCard(db, customer));
+  if (card.loyalty_card.balance < points) {
+    return false;
+  }
+  await adjust(card.code, -points);
+  return true;
 }
 
-module.exports = { getBalance, changePoints, normalize };
+async function addPoints(db, email, points) {
+  const customer = normalize(email);
+  const code = (await savedCode(db, customer)) || ((await findCard(db, customer)) || (await createCard(db, customer))).code;
+  await adjust(code, points);
+}
+
+module.exports = { getBalance, spendPoints, addPoints, normalize };

@@ -18,7 +18,8 @@ async function init() {
       expires_at TIMESTAMPTZ NOT NULL,
       status TEXT NOT NULL DEFAULT 'held',
       code TEXT,
-      checkout_url TEXT
+      checkout_url TEXT,
+      points_used INTEGER NOT NULL DEFAULT 0
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS reservations_seat ON reservations (event_id, seat_id)');

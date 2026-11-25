@@ -16,6 +16,13 @@
       <p id="cancelled" class="error" hidden>Płatność została przerwana. Możesz spróbować jeszcze raz.</p>
       <p id="waiting" hidden>Czekamy na potwierdzenie płatności od Stripe'a. Bilet pojawi się tutaj sam, gdy płatność dotrze.</p>
       <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
+      <div id="loyalty" class="loyalty" hidden>
+        <label>
+          Użyj punktów
+          <input id="points" type="number" min="0" step="1" value="0">
+        </label>
+        <p id="pointsHint" class="hint"></p>
+      </div>
       <button id="pay" class="button">Zapłać</button>
       <p id="error" class="error"></p>
     </section>
@@ -40,6 +47,7 @@
     let reservation;
     let timer;
     let started = false;
+    let maxPoints = 0;
 
     function show(sectionId) {
       for (const section of document.querySelectorAll('section')) {
@@ -58,6 +66,42 @@
       const minutes = Math.floor(left / 60000);
       const seconds = Math.floor(left / 1000) % 60;
       document.getElementById('timer').textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function pointsValue() {
+      return Number(document.getElementById('points').value || 0);
+    }
+
+    function updatePrice() {
+      const points = pointsValue();
+      const valid = Number.isInteger(points) && points >= 0 && points <= maxPoints;
+      const hint = document.getElementById('pointsHint');
+      const pay = document.getElementById('pay');
+
+      hint.className = valid ? 'hint' : 'error';
+      hint.textContent = `Możesz użyć najwięcej ${maxPoints} punktów (${formatPrice(maxPoints)}). 1 punkt = 1 grosz.`;
+      pay.disabled = !valid;
+      pay.textContent = `Zapłać ${formatPrice(reservation.amount - (valid ? points : 0))}`;
+    }
+
+    async function loadPoints() {
+      const input = document.getElementById('points');
+
+      if (reservation.pointsUsed > 0) {
+        maxPoints = reservation.pointsUsed;
+        input.value = reservation.pointsUsed;
+        input.disabled = true;
+      } else {
+        const res = await fetch(`/api/loyalty?email=${encodeURIComponent(reservation.email)}`);
+        if (!res.ok) {
+          return;
+        }
+        const { points } = await res.json();
+        maxPoints = Math.min(points, Math.floor(reservation.amount / 2));
+      }
+
+      document.getElementById('loyalty').hidden = false;
+      updatePrice();
     }
 
     async function fetchReservation() {
@@ -87,6 +131,7 @@
         show('held');
         tick();
         timer = setInterval(tick, 1000);
+        loadPoints();
       }
       setTimeout(refresh, 2000);
     }
@@ -117,13 +162,20 @@
       render();
     }
 
+    document.getElementById('points').oninput = updatePrice;
+
     document.getElementById('pay').onclick = async () => {
       const button = document.getElementById('pay');
       const error = document.getElementById('error');
       button.disabled = true;
       error.textContent = '';
 
-      const res = await fetch(`/api/reservations/${reservationId}/checkout`, { method: 'POST' });
+      const body = document.getElementById('loyalty').hidden ? {} : { points: pointsValue() };
+      const res = await fetch(`/api/reservations/${reservationId}/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       const data = await res.json();
 
       if (res.ok) {

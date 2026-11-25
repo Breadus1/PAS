@@ -139,6 +139,10 @@ button:disabled {
   color: #666;
 }
 
+.loyalty {
+  margin-bottom: 12px;
+}
+
 .ticket {
   padding: 16px;
   background: #fff;

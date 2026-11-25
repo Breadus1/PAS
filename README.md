@@ -36,8 +36,8 @@ W PowerShellu: `$env:RESERVATION_MINUTES=2; npm start`
 | GET | `/api/events` | lista seansów z `price` w groszach |
 | GET | `/api/events/:id` | `{ event, takenSeats }` |
 | POST | `/api/reservations` | `{ reservationId, expiresAt, amount }` |
-| GET | `/api/reservations/:id` | `{ status, amount, expiresAt, code? }`, status: `held`, `paid`, `expired` |
-| POST | `/api/reservations/:id/checkout` | `{ url }` strony płatności Stripe |
+| GET | `/api/reservations/:id` | `{ status, amount, expiresAt, code?, pointsUsed, pointsEarned? }`, status: `held`, `paid`, `expired` |
+| POST | `/api/reservations/:id/checkout` | body opcjonalnie `{ points }`; `{ url }` strony płatności Stripe na `amount − points` |
 | POST | `/api/webhooks/stripe` | zdarzenia od Stripe, m.in. `checkout.session.completed` |
 | GET | `/api/loyalty?email=…` | `{ email, points }`, saldo z Voucherify; nowy klient ma 1000 punktów |
 

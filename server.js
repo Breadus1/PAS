@@ -67,7 +67,7 @@ function createCheckoutSession(reservation, baseUrl) {
         quantity: 1,
         price_data: {
           currency: 'pln',
-          unit_amount: reservation.amount,
+          unit_amount: reservation.amount - reservation.points_used,
           product_data: {
             name: `${event.title}, ${event.hall}, fotel ${reservation.seat_id}`,
           },
@@ -230,13 +230,21 @@ app.get('/api/reservations/:id', async (req, res) => {
     ...reservationResponse(reservation),
     eventId: reservation.event_id,
     seatId: reservation.seat_id,
+    email: reservation.email,
     status: statusOf(reservation),
     code: reservation.code || undefined,
+    pointsUsed: reservation.points_used,
   });
 });
 
 app.post('/api/reservations/:id/checkout', async (req, res) => {
   const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const requested = (req.body || {}).points;
+  const points = requested === undefined ? 0 : requested;
+
+  if (!Number.isInteger(points) || points < 0) {
+    return res.status(400).json({ error: 'Liczba punktów musi być liczbą całkowitą, 0 lub więcej' });
+  }
 
   let result;
   try {
@@ -254,16 +262,45 @@ app.post('/api/reservations/:id/checkout', async (req, res) => {
         return { status: 410, error: 'Rezerwacja wygasła, fotel wrócił do puli' };
       }
 
-      if (!reservation.checkout_url) {
-        const session = await createCheckoutSession(reservation, baseUrl);
-        reservation.checkout_url = session.url;
-        await client.query('UPDATE reservations SET checkout_url = $2 WHERE id = $1', [reservation.id, session.url]);
+      if (reservation.checkout_url) {
+        if (requested !== undefined && points !== reservation.points_used) {
+          return { status: 409, error: `Punkty dla tej rezerwacji są już wybrane: ${reservation.points_used}` };
+        }
+        return { status: 200, url: reservation.checkout_url };
       }
-      return { status: 200, url: reservation.checkout_url };
+
+      if (points > reservation.amount / 2) {
+        return { status: 400, error: 'Punktami można zapłacić najwyżej połowę ceny' };
+      }
+
+      if (points > 0) {
+        await db.lock(client, `klient:${loyalty.normalize(reservation.email)}`);
+        const spent = await loyalty.spendPoints(client, reservation.email, points);
+        if (!spent) {
+          return { status: 400, error: 'Masz za mało punktów' };
+        }
+      }
+
+      reservation.points_used = points;
+      let session;
+      try {
+        session = await createCheckoutSession(reservation, baseUrl);
+      } catch (err) {
+        if (points > 0) {
+          await loyalty.addPoints(client, reservation.email, points);
+        }
+        throw err;
+      }
+
+      await client.query(
+        'UPDATE reservations SET points_used = $2, checkout_url = $3 WHERE id = $1',
+        [reservation.id, points, session.url]
+      );
+      return { status: 200, url: session.url };
     });
   } catch (err) {
     console.error('Checkout:', err.message);
-    return res.status(503).json({ error: 'Płatności chwilowo nie działają, spróbuj za chwilę' });
+    return res.status(503).json({ error: 'Płatności albo program punktowy chwilowo nie działają, spróbuj za chwilę' });
   }
 
   if (result.error) {
