@@ -1,6 +1,9 @@
 const API_URL = process.env.VOUCHERIFY_API_URL || 'https://api.voucherify.io';
 const CAMPAIGN_ID = process.env.VOUCHERIFY_CAMPAIGN_ID;
 const WELCOME_POINTS = 1000;
+const CACHE_MS = 10 * 1000;
+
+const balances = new Map();
 
 async function voucherify(method, path, body) {
   if (!process.env.VOUCHERIFY_APP_ID || !process.env.VOUCHERIFY_SECRET_KEY || !CAMPAIGN_ID) {
@@ -71,8 +74,16 @@ async function createCard(db, email, extraPoints) {
 }
 
 async function getBalance(db, email) {
-  const card = await findCard(db, normalize(email));
-  return card ? card.loyalty_card.balance : WELCOME_POINTS;
+  const customer = normalize(email);
+  const cached = balances.get(customer);
+  if (cached && cached.until > Date.now()) {
+    return cached.points;
+  }
+
+  const card = await findCard(db, customer);
+  const points = card ? card.loyalty_card.balance : WELCOME_POINTS;
+  balances.set(customer, { points, until: Date.now() + CACHE_MS });
+  return points;
 }
 
 async function spendPoints(db, email, points) {
@@ -82,6 +93,7 @@ async function spendPoints(db, email, points) {
     return false;
   }
   await adjust(card.code, -points);
+  balances.delete(customer);
   return true;
 }
 
@@ -93,6 +105,7 @@ async function addPoints(db, email, points) {
   } else {
     await createCard(db, customer, points);
   }
+  balances.delete(customer);
 }
 
 module.exports = { getBalance, spendPoints, addPoints, normalize };
