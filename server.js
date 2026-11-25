@@ -95,17 +95,96 @@ async function handlePayment(reservationId, session) {
     }
     if (current.expires_at > new Date()) {
       const code = crypto.randomBytes(4).toString('hex').toUpperCase();
-      await client.query("UPDATE reservations SET status = 'paid', code = $2 WHERE id = $1", [reservationId, code]);
+      const pointsEarned = Math.floor((current.amount - current.points_used) / 100) * 10;
+      await client.query(
+        "UPDATE reservations SET status = 'paid', code = $2, points_earned = $3 WHERE id = $1",
+        [reservationId, code, pointsEarned]
+      );
       return true;
     }
     return false;
   });
 
-  if (!paidInTime) {
-    await stripe.refunds.create(
-      { payment_intent: session.payment_intent },
-      { idempotencyKey: `refund-${session.id}` }
+  if (paidInTime) {
+    await awardPoints(reservationId).catch((err) => console.error('Punkty za zakup:', err.message));
+    return;
+  }
+
+  await stripe.refunds.create(
+    { payment_intent: session.payment_intent },
+    { idempotencyKey: `refund-${session.id}` }
+  );
+  await returnPoints(reservationId).catch((err) => console.error('Zwrot punktów:', err.message));
+}
+
+function changeCustomerPoints(email, points) {
+  return db.transaction(async (client) => {
+    await db.lock(client, `klient:${loyalty.normalize(email)}`);
+    await loyalty.addPoints(client, email, points);
+  });
+}
+
+async function awardPoints(reservationId) {
+  const { rows } = await db.query(
+    "UPDATE reservations SET points_awarded = true WHERE id = $1 AND status = 'paid' AND NOT points_awarded RETURNING *",
+    [reservationId]
+  );
+  const reservation = rows[0];
+  if (!reservation || reservation.points_earned === 0) {
+    return;
+  }
+
+  try {
+    await changeCustomerPoints(reservation.email, reservation.points_earned);
+  } catch (err) {
+    await db.query('UPDATE reservations SET points_awarded = false WHERE id = $1', [reservationId]);
+    throw err;
+  }
+}
+
+async function returnPoints(reservationId) {
+  const { rows } = await db.query(
+    `UPDATE reservations SET points_returned = true
+     WHERE id = $1 AND status = 'held' AND expires_at <= $2 AND points_used > 0 AND NOT points_returned
+     RETURNING *`,
+    [reservationId, new Date()]
+  );
+  const reservation = rows[0];
+  if (!reservation) {
+    return;
+  }
+
+  try {
+    await changeCustomerPoints(reservation.email, reservation.points_used);
+  } catch (err) {
+    await db.query('UPDATE reservations SET points_returned = false WHERE id = $1', [reservationId]);
+    throw err;
+  }
+}
+
+let settlePausedUntil = 0;
+
+async function settle() {
+  if (Date.now() < settlePausedUntil) {
+    return;
+  }
+
+  try {
+    const expired = await db.query(
+      "SELECT id FROM reservations WHERE status = 'held' AND expires_at <= $1 AND points_used > 0 AND NOT points_returned",
+      [new Date()]
     );
+    for (const row of expired.rows) {
+      await returnPoints(row.id);
+    }
+
+    const paid = await db.query("SELECT id FROM reservations WHERE status = 'paid' AND NOT points_awarded");
+    for (const row of paid.rows) {
+      await awardPoints(row.id);
+    }
+  } catch (err) {
+    settlePausedUntil = Date.now() + 30 * 1000;
+    console.error('Sprzątanie:', err.message);
   }
 }
 
@@ -234,6 +313,7 @@ app.get('/api/reservations/:id', async (req, res) => {
     status: statusOf(reservation),
     code: reservation.code || undefined,
     pointsUsed: reservation.points_used,
+    pointsEarned: reservation.status === 'paid' ? reservation.points_earned : undefined,
   });
 });
 
@@ -326,4 +406,5 @@ db.init().then(() => {
   app.listen(PORT, () => {
     console.log(`Serwer działa na http://localhost:${PORT}`);
   });
+  setInterval(settle, 5000);
 });

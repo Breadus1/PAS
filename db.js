@@ -19,7 +19,10 @@ async function init() {
       status TEXT NOT NULL DEFAULT 'held',
       code TEXT,
       checkout_url TEXT,
-      points_used INTEGER NOT NULL DEFAULT 0
+      points_used INTEGER NOT NULL DEFAULT 0,
+      points_earned INTEGER,
+      points_awarded BOOLEAN NOT NULL DEFAULT false,
+      points_returned BOOLEAN NOT NULL DEFAULT false
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS reservations_seat ON reservations (event_id, seat_id)');
