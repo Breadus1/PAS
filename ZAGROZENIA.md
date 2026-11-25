@@ -50,4 +50,5 @@
 | Usypianie darmowego serwera | Pierwsze zapytanie po przerwie trwa około minuty; dane zostają w bazie, a sprzątacz po przebudzeniu kończy zaległe zwroty punktów i maile |
 | Baza Postgres to kolejna usługa zewnętrzna | Gdy baza nie odpowiada, API zwraca 5xx; darmowa baza Neon usypia się po bezczynności i budzi przy pierwszym zapytaniu |
 | Webhook nie dociera (np. zły adres w panelu Stripe) | Strona czeka na status, po czasie pokazuje wygaśnięcie; Stripe ponawia webhooki i spóźniona płatność kończy się zwrotem |
+| Nie da się założyć konta Voucherify (25.11.2026: błąd „Something went wrong” przy rejestracji w każdej przeglądarce i sieci, zrzut w `docs/voucherify-rejestracja-blad.png`) | Bez kluczy saldo i płatność punktami dają 503, zakupy bez punktów, bilety i maile działają; po założeniu konta wystarczy ustawić zmienne `VOUCHERIFY_*` |
 | Wyczerpany limit Voucherify w trakcie testu | Do końca godziny saldo i płatność punktami dają 503; zakupy bez punktów działają, punkty za zakup dopisują się po odnowieniu limitu |

@@ -69,6 +69,10 @@ Body rezerwacji: `{ eventId, seatId, customerName, email }`, np. `seatId: "F7"`.
 - Punkty wydane na rezerwację, która wygasła bez zapłaty, wracają same w ciągu kilku sekund.
 - Sandbox Voucherify przyjmuje 100 wywołań na godzinę; pełny `atak.js` zużywa około 20.
 
+**Stan na 25.11.2026: nie da się założyć konta Voucherify.** Formularz rejestracji (https://app.voucherify.io/#/signup) za każdym razem kończy się komunikatem „An error occurred: Something went wrong. Please try again later.” Próbowaliśmy w czterech przeglądarkach (dwie na komputerze, dwie na telefonie), przez Wi-Fi i dane komórkowe, z prywatnym i szkolnym adresem e-mail. Strona status.voucherify.io nie pokazywała w tym czasie żadnej awarii. Zrzut ekranu: [docs/voucherify-rejestracja-blad.png](docs/voucherify-rejestracja-blad.png).
+
+Kod programu lojalnościowego jest gotowy i przetestowany na zaślepce API zgodnej z dokumentacją Voucherify. Do czasu założenia konta `GET /api/loyalty` i płatność punktami odpowiadają 503 z komunikatem, a płatność bez punktów, bilet i mail działają normalnie. Po założeniu konta wystarczy ustawić na serwerze zmienne `VOUCHERIFY_*`; punkty za zakupy opłacone w międzyczasie dopisze automatycznie sprzątacz.
+
 Mail z biletem wysyła Resend. Bez własnej domeny tylko na adres właściciela konta i adresy testowe, np. `delivered+jan@resend.dev`.
 
 ## Stripe lokalnie
