@@ -37,6 +37,7 @@
       <p>Kod biletu</p>
       <p id="code" class="code"></p>
       <p>Pokaż ten kod przy wejściu na salę.</p>
+      <p id="summary" class="hint"></p>
     </section>
   </main>
 
@@ -114,6 +115,10 @@
         clearInterval(timer);
         document.getElementById('title').textContent = 'Twój bilet';
         document.getElementById('code').textContent = reservation.code;
+        document.getElementById('summary').textContent =
+          `Zapłacono kartą: ${formatPrice(reservation.amount - reservation.pointsUsed)} · ` +
+          `punktami: ${reservation.pointsUsed} pkt (${formatPrice(reservation.pointsUsed)}) · ` +
+          `zebrane punkty: ${reservation.pointsEarned} pkt. Bilet wysłaliśmy też na ${reservation.email}.`;
         show('ticket');
         return;
       }

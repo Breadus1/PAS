@@ -24,6 +24,8 @@ Strona: http://localhost:3000
 | `VOUCHERIFY_APP_ID`, `VOUCHERIFY_SECRET_KEY` | klucze projektu Sandbox w Voucherify (Project settings → Application keys) |
 | `VOUCHERIFY_CAMPAIGN_ID` | id kampanii lojalnościowej (`camp_…`) |
 | `VOUCHERIFY_API_URL` | adres API Voucherify, domyślnie `https://api.voucherify.io` (inny klaster np. `https://us1.api.voucherify.io`) |
+| `RESEND_API_KEY` | klucz Resend (`re_…`) do maili z biletem |
+| `EMAIL_FROM` | nadawca maili, domyślnie `KinoBilet <onboarding@resend.dev>` |
 
 Klucze są tylko w zmiennych środowiskowych na serwerze, nigdy w repozytorium.
 

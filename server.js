@@ -5,6 +5,7 @@ const events = require('./events');
 const rateLimit = require('./rateLimit');
 const db = require('./db');
 const loyalty = require('./loyalty');
+const mail = require('./mail');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'brak-klucza');
 
 const app = express();
@@ -107,6 +108,7 @@ async function handlePayment(reservationId, session) {
 
   if (paidInTime) {
     await awardPoints(reservationId).catch((err) => console.error('Punkty za zakup:', err.message));
+    await sendTicketEmail(reservationId).catch((err) => console.error('Mail z biletem:', err.message));
     return;
   }
 
@@ -162,30 +164,58 @@ async function returnPoints(reservationId) {
   }
 }
 
-let settlePausedUntil = 0;
-
-async function settle() {
-  if (Date.now() < settlePausedUntil) {
+async function sendTicketEmail(reservationId) {
+  const { rows } = await db.query(
+    `UPDATE reservations SET email_sent = true, email_attempts = email_attempts + 1
+     WHERE id = $1 AND status = 'paid' AND NOT email_sent AND email_attempts < 5
+     RETURNING *`,
+    [reservationId]
+  );
+  const reservation = rows[0];
+  if (!reservation) {
     return;
   }
 
   try {
-    const expired = await db.query(
-      "SELECT id FROM reservations WHERE status = 'held' AND expires_at <= $1 AND points_used > 0 AND NOT points_returned",
-      [new Date()]
-    );
-    for (const row of expired.rows) {
-      await returnPoints(row.id);
-    }
+    await mail.sendTicket(reservation, findEvent(reservation.event_id));
+  } catch (err) {
+    await db.query('UPDATE reservations SET email_sent = false WHERE id = $1', [reservationId]);
+    throw err;
+  }
+}
 
-    const paid = await db.query("SELECT id FROM reservations WHERE status = 'paid' AND NOT points_awarded");
-    for (const row of paid.rows) {
-      await awardPoints(row.id);
+const pausedUntil = { punkty: 0, mail: 0 };
+
+async function retry(kind, sql, params, work) {
+  if (Date.now() < pausedUntil[kind]) {
+    return;
+  }
+
+  try {
+    const { rows } = await db.query(sql, params);
+    for (const row of rows) {
+      await work(row.id);
     }
   } catch (err) {
-    settlePausedUntil = Date.now() + 30 * 1000;
-    console.error('Sprzątanie:', err.message);
+    pausedUntil[kind] = Date.now() + 30 * 1000;
+    console.error(`Ponowienie (${kind}):`, err.message);
   }
+}
+
+async function settle() {
+  await retry(
+    'punkty',
+    "SELECT id FROM reservations WHERE status = 'held' AND expires_at <= $1 AND points_used > 0 AND NOT points_returned",
+    [new Date()],
+    returnPoints
+  );
+  await retry('punkty', "SELECT id FROM reservations WHERE status = 'paid' AND NOT points_awarded", [], awardPoints);
+  await retry(
+    'mail',
+    "SELECT id FROM reservations WHERE status = 'paid' AND NOT email_sent AND email_attempts < 5",
+    [],
+    sendTicketEmail
+  );
 }
 
 function page(file) {
