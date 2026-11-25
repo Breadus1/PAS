@@ -43,6 +43,22 @@
 | Wstrzyknięcie HTML w imieniu klienta do maila | Imię jest escapowane przed wstawieniem do treści maila |
 | Adres z `+` wpisany w adresie bez kodowania | `GET /api/loyalty` zamienia spację z powrotem na `+` (e-mail nie może zawierać spacji) |
 
+## Lista oczekujących i webhook Resenda (etap IV)
+
+| Zagrożenie | Co robimy |
+|---|---|
+| Zwolnione miejsce zajmuje ktoś z zewnątrz, zanim dostanie je kolejka | Gdy ktoś czeka w kolejce, `POST /api/reservations` na ten seans zwraca 409; sprzątacz co 5 s oddaje wolne fotele kolejce |
+| Dwie instancje albo dwa przebiegi sprzątacza dają to samo miejsce dwóm osobom | Przydział miejsc działa pod blokadą listy danego seansu i blokadą fotela; przed założeniem rezerwacji sprawdzamy jeszcze raz, czy fotel jest wolny |
+| Ktoś podszywa się pod Resend i „odbija” cudzy mail, żeby przejąć miejsce | Webhook Resenda ma podpis Svix (HMAC-SHA256 sekretem `RESEND_WEBHOOK_SECRET`, najwyżej 5 minut różnicy czasu); bez poprawnego podpisu 400 |
+| Resend wysyła to samo `email.bounced` kilka razy | Wpis zmienia się z `offered` na `missed` tylko raz, kolejne powtórki nic nie robią |
+| Mail z ofertą nie dochodzi (nieistniejący adres) | `email.bounced` / `email.failed` od razu zwalnia rezerwację i daje miejsce następnej osobie, nie czekamy do końca czasu |
+| Resend nie działa przy wysyłce oferty | Sprzątacz ponawia mail, dopóki oferta jest ważna; gdy się nie uda, oferta wygasa i miejsce idzie dalej. Klient widzi ofertę także na stronie `/waitlist/:id` |
+| Limity Resend (2 zapytania na sekundę, 100 maili dziennie na darmowym planie) | Maile nieudane z powodu limitu ponawiamy; klucz idempotencji `oferta-<id>` / `bilet-<id>`, więc nikt nie dostanie maila dwa razy |
+| Ktoś zapisuje się wiele razy albo zasypuje listę | Ponowny zapis tym samym e-mailem zwraca ten sam wpis; limit 30 zapisów na 10 s na adres IP |
+| Osoba z ofertą wypisuje się albo nie płaci | Wypisanie zwalnia jej rezerwację od razu; niezapłacona rezerwacja wygasa jak zwykła; wydane punkty wracają przez sprzątacza |
+| Spóźniona płatność za ofertę, która przeszła już do kolejnej osoby | Jak w etapie II: webhook pod blokadą fotela widzi wygasłą rezerwację, zwrot pieniędzy i punktów |
+| Vercel Cron na darmowym planie działa raz dziennie | Nie używamy Vercela: serwer na Renderze działa stale, sprzątacz co 5 s |
+
 ## Znane ryzyka
 
 | Ryzyko | Skutek |
@@ -51,4 +67,5 @@
 | Baza Postgres to kolejna usługa zewnętrzna | Gdy baza nie odpowiada, API zwraca 5xx; darmowa baza Neon usypia się po bezczynności i budzi przy pierwszym zapytaniu |
 | Webhook nie dociera (np. zły adres w panelu Stripe) | Strona czeka na status, po czasie pokazuje wygaśnięcie; Stripe ponawia webhooki i spóźniona płatność kończy się zwrotem |
 | Nie da się założyć konta Voucherify (25.11.2026: błąd „Something went wrong” przy rejestracji w każdej przeglądarce i sieci, zrzut w `docs/voucherify-rejestracja-blad.png`) | Bez kluczy saldo i płatność punktami dają 503, zakupy bez punktów, bilety i maile działają; po założeniu konta wystarczy ustawić zmienne `VOUCHERIFY_*` |
+| `waitlist-test` ma tylko dwa miejsca | Kupione bilety nigdy się nie zwalniają, więc po opłaceniu obu miejsc seans zostaje wyprzedany na stałe i kolejka nie ruszy; `atak.js` niczego tam nie kupuje |
 | Wyczerpany limit Voucherify w trakcie testu | Do końca godziny saldo i płatność punktami dają 503; zakupy bez punktów działają, punkty za zakup dopisują się po odnowieniu limitu |
