@@ -11,6 +11,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'brak-klucza')
 const app = express();
 const PORT = process.env.PORT || 3000;
 const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
+const APP_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 const reservationLimit = rateLimit(30, 10 * 1000);
 const loyaltyLimit = rateLimit(20, 60 * 1000);
 const waitlistLimit = rateLimit(30, 10 * 1000);
@@ -206,6 +207,13 @@ async function retry(kind, sql, params, work) {
 async function settle() {
   await retry('lista', "SELECT DISTINCT event_id AS id FROM waitlist WHERE status = 'waiting'", [], offerFreeSeats);
   await retry(
+    'mail',
+    `SELECT w.id FROM waitlist w JOIN reservations r ON r.id = w.reservation_id
+     WHERE w.status = 'offered' AND NOT w.email_sent AND r.status = 'held' AND r.expires_at > $1`,
+    [new Date()],
+    sendOfferEmail
+  );
+  await retry(
     'punkty',
     "SELECT id FROM reservations WHERE status = 'held' AND expires_at <= $1 AND points_used > 0 AND NOT points_returned",
     [new Date()],
@@ -253,7 +261,7 @@ async function waitlistView(entry) {
 async function offerFreeSeats(eventId) {
   const event = findEvent(eventId);
 
-  return db.transaction(async (client) => {
+  const offered = await db.transaction(async (client) => {
     await db.lock(client, `lista:${eventId}`);
 
     const { rows: queue } = await client.query(
@@ -299,6 +307,58 @@ async function offerFreeSeats(eventId) {
 
     return offered;
   });
+
+  for (const waitlistId of offered) {
+    await sendOfferEmail(waitlistId).catch((err) => console.error('Mail z ofertą:', err.message));
+  }
+}
+
+async function sendOfferEmail(waitlistId) {
+  const { rows } = await db.query(
+    "UPDATE waitlist SET email_sent = true WHERE id = $1 AND status = 'offered' AND NOT email_sent RETURNING *",
+    [waitlistId]
+  );
+  const entry = rows[0];
+  if (!entry) {
+    return;
+  }
+
+  try {
+    const reservation = await findReservation(entry.reservation_id);
+    const link = `${APP_URL}/reservations/${reservation.id}`;
+    const emailId = await mail.sendOffer(entry, reservation, findEvent(entry.event_id), link);
+    await db.query('UPDATE waitlist SET email_id = $2 WHERE id = $1', [waitlistId, emailId]);
+  } catch (err) {
+    await db.query('UPDATE waitlist SET email_sent = false WHERE id = $1', [waitlistId]);
+    throw err;
+  }
+}
+
+async function handleUndelivered(emailId) {
+  const { rows } = await db.query('SELECT * FROM waitlist WHERE email_id = $1', [emailId]);
+  const found = rows[0];
+  if (!found) {
+    return;
+  }
+
+  const outcome = await db.transaction(async (client) => {
+    await db.lock(client, `lista:${found.event_id}`);
+    const current = await client.query('SELECT * FROM waitlist WHERE id = $1', [found.id]);
+    const entry = current.rows[0];
+    if (entry.status !== 'offered') {
+      return 'none';
+    }
+
+    const result = await cancelOffer(client, entry.reservation_id);
+    if (result !== 'paid') {
+      await client.query("UPDATE waitlist SET status = 'missed' WHERE id = $1", [entry.id]);
+    }
+    return result;
+  });
+
+  if (outcome === 'cancelled') {
+    await offerFreeSeats(found.event_id);
+  }
 }
 
 async function cancelOffer(client, reservationId) {
@@ -344,6 +404,22 @@ app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyn
     if (session.client_reference_id && session.payment_status === 'paid') {
       await handlePayment(session.client_reference_id, session);
     }
+  }
+
+  res.json({ received: true });
+});
+
+app.post('/api/webhooks/resend', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!mail.verifyWebhook(req.body, req.headers)) {
+    return res.status(400).json({ error: 'Niepoprawny podpis webhooka' });
+  }
+
+  const event = JSON.parse(req.body.toString('utf8'));
+  const emailId = event.data && event.data.email_id;
+  console.log(`Resend: ${event.type}, mail ${emailId}`);
+
+  if (['email.bounced', 'email.failed'].includes(event.type) && emailId) {
+    await handleUndelivered(emailId);
   }
 
   res.json({ received: true });
