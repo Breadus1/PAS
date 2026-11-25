@@ -56,6 +56,7 @@ async function main() {
   if (!WEBHOOK_SECRET) {
     console.log('Bez STRIPE_WEBHOOK_SECRET testy webhooka zostaną pominięte.');
   }
+  console.log('Pełny atak zużywa około 20 z 100 godzinnych wywołań Voucherify (sandbox).');
   console.log();
 
   const events = (await request('GET', '/api/events')).data;
@@ -66,8 +67,13 @@ async function main() {
 
   const reserve = (seatId, n, headers) =>
     request('POST', '/api/reservations', { eventId: event._id, seatId, ...person(n) }, headers);
-  const checkout = (id) => request('POST', `/api/reservations/${id}/checkout`);
+  const checkout = (id, body) => request('POST', `/api/reservations/${id}/checkout`, body);
   const status = async (id) => (await request('GET', `/api/reservations/${id}`)).data;
+  const reserveAs = (seatId, email) =>
+    request('POST', '/api/reservations', { eventId: event._id, seatId, customerName: 'Atak', email });
+  const loyaltyOf = (email) => request('GET', `/api/loyalty?email=${encodeURIComponent(email)}`);
+  const pointsOf = async (email) => (await loyaltyOf(email)).data.points;
+  const tag = Date.now();
 
   const a1 = await request('GET', '/api/events/nie-ma-takiego');
   check('A1  nieistniejące wydarzenie', is4xx(a1), a1.status);
@@ -78,6 +84,11 @@ async function main() {
 
   const c3c = await sendWebhook('abc', 'whsec_falszywy');
   check('C3  webhook ze złym podpisem', c3c === 400, c3c);
+
+  if (WEBHOOK_SECRET) {
+    const orphan = await sendWebhook(null);
+    check('II.B2 podpisane zdarzenie bez rezerwacji', orphan >= 200 && orphan < 300, orphan);
+  }
 
   const seatB3 = free.shift();
   const b3 = [
@@ -100,11 +111,14 @@ async function main() {
   check('B1  podwójna rezerwacja równolegle', b1c.ok && b1d.ok && b1c.data.reservationId === b1d.data.reservationId, `${b1c.status}, ${b1d.status}`);
 
   const c1a = await checkout(b1a.data.reservationId);
-  if (c1a.status === 503) {
+  const stripeReady = c1a.status !== 503;
+  if (!stripeReady) {
     skip('C1  podwójna płatność', 'serwer nie ma kluczy Stripe');
   } else {
     const c1b = await checkout(b1a.data.reservationId);
     check('C1  podwójna płatność po kolei: ta sama sesja', c1a.ok && c1b.ok && c1a.data.url === c1b.data.url, `${c1a.status}, ${c1b.status}`);
+    const forged = await checkout(b1a.data.reservationId, { amount: 100 });
+    check('II.A1 checkout z { amount: 100 }: ta sama sesja', forged.ok && forged.data.url === c1a.data.url, forged.status);
     const [c1c, c1d] = await Promise.all([checkout(b1c.data.reservationId), checkout(b1c.data.reservationId)]);
     check('C1  podwójna płatność równolegle: ta sama sesja', c1c.ok && c1d.ok && c1c.data.url === c1d.data.url, `${c1c.status}, ${c1d.status}`);
   }
@@ -121,6 +135,44 @@ async function main() {
     check('C4  płatność za opłaconą rezerwację', is4xx(paidAgain), paidAgain.status);
   } else {
     skip('C1  webhook dla jednej płatności', 'brak STRIPE_WEBHOOK_SECRET');
+  }
+
+  const loyaltyEmail = `delivered+atak${tag}@resend.dev`;
+  const noEmail = await request('GET', '/api/loyalty');
+  check('III loyalty bez e-maila', is4xx(noEmail), noEmail.status);
+
+  const fresh = await loyaltyOf(loyaltyEmail);
+  const loyaltyReady = fresh.status !== 503;
+  if (!loyaltyReady) {
+    skip('III punkty', 'serwer nie ma kluczy Voucherify');
+  } else {
+    check('III nowy klient ma 1000 punktów', fresh.data.points === 1000, JSON.stringify(fresh.data));
+
+    const idPts = (await reserveAs(free.shift(), loyaltyEmail)).data.reservationId;
+    const wrong = [
+      await checkout(idPts, { points: event.price }),
+      await checkout(idPts, { points: 'abc' }),
+      await checkout(idPts, { points: -1 }),
+    ];
+    check('III punkty ponad połowę ceny albo złe wartości', wrong.every(is4xx), wrong.map((r) => r.status).join(', '));
+    const overBalance = await checkout(idPts, { points: 1200 });
+    check('III więcej punktów niż saldo (1200 > 1000)', is4xx(overBalance), overBalance.status);
+
+    if (stripeReady) {
+      const [p1, p2] = await Promise.all([checkout(idPts, { points: 1000 }), checkout(idPts, { points: 1000 })]);
+      check('III 2× checkout z 1000 pkt: ta sama sesja', p1.ok && p2.ok && p1.data.url === p2.data.url, `${p1.status}, ${p2.status}`);
+      await sleep(2000);
+      const afterSpend = await pointsOf(loyaltyEmail);
+      check('III punkty zeszły raz: saldo 0, pointsUsed 1000', afterSpend === 0 && (await status(idPts)).pointsUsed === 1000, afterSpend);
+
+      if (WEBHOOK_SECRET) {
+        await sendWebhook(idPts);
+        await sleep(2000);
+        const paidPts = await status(idPts);
+        const afterEarn = await pointsOf(loyaltyEmail);
+        check('III po zapłacie pointsEarned 220 i saldo 220', paidPts.pointsEarned === 220 && afterEarn === 220, `${paidPts.pointsEarned}, ${afterEarn}`);
+      }
+    }
   }
 
   console.log('\nCzekam 11 s na reset limitu…');
@@ -146,6 +198,13 @@ async function main() {
   const rLate = await reserve(seatLate, 202);
   const rPaid = await reserve(seatPaid, 203);
   const rRace = await Promise.all(raceSeats.map((seat, i) => reserve(seat, 210 + i)));
+
+  const expireEmail = `delivered+wygasa${tag}@resend.dev`;
+  let idExpirePts;
+  if (loyaltyReady && stripeReady) {
+    idExpirePts = (await reserveAs(free.shift(), expireEmail)).data.reservationId;
+    await checkout(idExpirePts, { points: 500 });
+  }
 
   if (WEBHOOK_SECRET) {
     await sendWebhook(rPaid.data.reservationId);
@@ -190,6 +249,11 @@ async function main() {
 
   console.log('\nCzekam 11 s na reset limitu…');
   await sleep(11000);
+
+  if (idExpirePts) {
+    const returned = await pointsOf(expireEmail);
+    check('III wygasła rezerwacja oddaje punkty (1000)', returned === 1000, returned);
+  }
 
   const spamSeats = events.slice(1).flatMap((e) => e.seats.map((seatId) => ({ eventId: e._id, seatId }))).slice(0, 100);
   const spam = spamSeats.map((seat, i) =>
