@@ -1,14 +1,20 @@
 # KinoBilet
 
-Kasa biletowa kina (PAS S01). Klient wybiera seans i fotel, rezerwuje go na 15 minut, płaci kartą przez Stripe Checkout i dostaje bilet z kodem.
+Kasa biletowa kina (PAS S01). Klient wybiera seans i fotel, rezerwuje go na 15 minut, płaci kartą przez Stripe Checkout (część ceny może zapłacić punktami z programu lojalnościowego w Voucherify) i dostaje bilet z kodem, także mailem przez Resend. Dane są w bazie Postgres.
 
 **Wdrożenie:** https://kinobilet.onrender.com (Render, tryb testowy: rezerwacja na 2 minuty). Darmowy serwer usypia po 15 minutach bez ruchu, więc pierwsze zapytanie po przerwie trwa około minuty.
 
 ## Uruchomienie
 
+Potrzebna jest baza Postgres, lokalnie np. w Dockerze:
+
+```
+docker run -d --name kino-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=kino -p 5432:5432 postgres:16-alpine
+```
+
 ```
 npm install
-npm start
+DATABASE_URL=postgres://postgres:test@localhost:5432/kino npm start
 ```
 
 Strona: http://localhost:3000
@@ -29,7 +35,7 @@ Strona: http://localhost:3000
 
 Klucze są tylko w zmiennych środowiskowych na serwerze, nigdy w repozytorium.
 
-W PowerShellu: `$env:RESERVATION_MINUTES=2; npm start`
+W PowerShellu: `$env:DATABASE_URL="postgres://postgres:test@localhost:5432/kino"; $env:RESERVATION_MINUTES=2; npm start`
 
 ## API
 
@@ -49,10 +55,21 @@ Body rezerwacji: `{ eventId, seatId, customerName, email }`, np. `seatId: "F7"`.
 
 - `/` – repertuar
 - `/events/:id` – mapa sali
-- `/reserve?eventId=…&seatId=…` – formularz rezerwacji
-- `/reservations/:id` – licznik czasu i przycisk „Zapłać”
-- `/reservations/:id?payment=success` – powrót po zapłacie: „płatność w toku…”, potem bilet
+- `/reserve?eventId=…&seatId=…` – formularz rezerwacji, po wpisaniu e-maila saldo punktów
+- `/reservations/:id` – licznik czasu, pole „Użyj punktów” i przycisk „Zapłać” z kwotą do dopłaty
+- `/reservations/:id?payment=success` – powrót po zapłacie: „czekamy na potwierdzenie”, potem bilet z podsumowaniem
 - `/reservations/:id?payment=cancelled` – powrót po przerwaniu, można zapłacić ponownie
+
+## Program lojalnościowy
+
+- Nowy klient (e-mail) ma 1000 punktów, 1 punkt = 1 grosz.
+- Punktami można zapłacić do połowy ceny, resztę kartą.
+- Za każdy pełny złoty zapłacony kartą klient dostaje 10 punktów.
+- Saldo trzyma Voucherify (kampania lojalnościowa w projekcie Sandbox, klient = e-mail jako `source_id`).
+- Punkty wydane na rezerwację, która wygasła bez zapłaty, wracają same w ciągu kilku sekund.
+- Sandbox Voucherify przyjmuje 100 wywołań na godzinę; pełny `atak.js` zużywa około 20.
+
+Mail z biletem wysyła Resend. Bez własnej domeny tylko na adres właściciela konta i adresy testowe, np. `delivered+jan@resend.dev`.
 
 ## Stripe lokalnie
 
