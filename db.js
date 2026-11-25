@@ -34,6 +34,20 @@ async function init() {
       member_id TEXT NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id TEXT PRIMARY KEY,
+      seq BIGSERIAL,
+      event_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      customer_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'waiting',
+      reservation_id TEXT,
+      email_sent BOOLEAN NOT NULL DEFAULT false,
+      email_id TEXT
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS waitlist_event ON waitlist (event_id, status)');
 }
 
 function query(text, params) {

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinoBilet – lista oczekujących</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a href="/">KinoBilet</a></header>
+  <main>
+    <h1 id="title">Lista oczekujących</h1>
+    <p id="info">Ładowanie…</p>
+
+    <section id="waiting" hidden>
+      <p>Jesteś <strong id="position"></strong>. w kolejce.</p>
+      <p>Gdy zwolni się miejsce, zarezerwujemy je dla Ciebie i wyślemy mail z linkiem do zapłaty.</p>
+    </section>
+
+    <section id="offered" hidden>
+      <p>Zwolniło się miejsce! Czeka na Ciebie do <strong id="until"></strong>.</p>
+      <p><a id="pay" class="button" href="/">Przejdź do płatności</a></p>
+    </section>
+
+    <section id="done" hidden>
+      <p>Bilet kupiony.</p>
+      <p><a id="ticket" href="/">Zobacz bilet</a></p>
+    </section>
+
+    <section id="missed" hidden>
+      <p class="error">Miejsce przeszło do następnej osoby z kolejki: nie było płatności na czas albo mail do Ciebie nie doszedł.</p>
+    </section>
+
+    <section id="left" hidden>
+      <p>Wypisałeś się z listy oczekujących.</p>
+    </section>
+
+    <button id="leave" class="button" hidden>Wypisz mnie</button>
+    <p id="error" class="error"></p>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    const waitlistId = location.pathname.split('/')[2];
+    let entry;
+
+    function show(sectionId) {
+      for (const section of document.querySelectorAll('section')) {
+        section.hidden = section.id !== sectionId;
+      }
+    }
+
+    function render() {
+      show(entry.status);
+      document.getElementById('leave').hidden = !['waiting', 'offered'].includes(entry.status);
+
+      if (entry.status === 'waiting') {
+        document.getElementById('position').textContent = entry.position;
+      }
+      if (entry.status === 'offered') {
+        document.getElementById('until').textContent = new Date(entry.offerExpiresAt).toLocaleTimeString('pl-PL', {
+          timeZone: 'Europe/Warsaw',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        document.getElementById('pay').href = `/reservations/${entry.reservationId}`;
+      }
+      if (entry.status === 'done') {
+        document.getElementById('ticket').href = `/reservations/${entry.reservationId}`;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch(`/api/waitlist/${waitlistId}`);
+        if (res.ok) {
+          entry = await res.json();
+          render();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+      if (['waiting', 'offered'].includes(entry && entry.status)) {
+        setTimeout(refresh, 3000);
+      }
+    }
+
+    async function load() {
+      const res = await fetch(`/api/waitlist/${waitlistId}`);
+      if (!res.ok) {
+        document.getElementById('title').textContent = 'Nie ma takiego zapisu na liście';
+        document.getElementById('info').textContent = '';
+        return;
+      }
+      entry = await res.json();
+
+      const eventRes = await fetch(`/api/events/${entry.eventId}`);
+      const { event } = await eventRes.json();
+      document.getElementById('info').textContent =
+        `${event.title} · ${formatDate(event.startsAt)} · ${event.hall} · ${formatPrice(event.price)}`;
+
+      render();
+      setTimeout(refresh, 3000);
+    }
+
+    document.getElementById('leave').onclick = async () => {
+      const button = document.getElementById('leave');
+      const error = document.getElementById('error');
+      button.disabled = true;
+      error.textContent = '';
+
+      const res = await fetch(`/api/waitlist/${waitlistId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        entry = data;
+        render();
+      } else {
+        error.textContent = data.error;
+      }
+      button.disabled = false;
+    };
+
+    load();
+  </script>
+</body>
+</html>

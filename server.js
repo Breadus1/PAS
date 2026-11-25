@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 const RESERVATION_MINUTES = Number(process.env.RESERVATION_MINUTES) || 15;
 const reservationLimit = rateLimit(30, 10 * 1000);
 const loyaltyLimit = rateLimit(20, 60 * 1000);
+const waitlistLimit = rateLimit(30, 10 * 1000);
 
 app.set('trust proxy', 3);
 
@@ -218,6 +219,36 @@ async function settle() {
   );
 }
 
+async function findWaitlistEntry(id) {
+  const { rows } = await db.query('SELECT * FROM waitlist WHERE id = $1', [id]);
+  return rows[0];
+}
+
+async function waitlistView(entry) {
+  const view = { waitlistId: entry.id, eventId: entry.event_id, status: entry.status, position: null };
+
+  if (entry.status === 'waiting') {
+    const { rows } = await db.query(
+      "SELECT count(*)::int AS position FROM waitlist WHERE event_id = $1 AND status = 'waiting' AND seq <= $2",
+      [entry.event_id, entry.seq]
+    );
+    view.position = rows[0].position;
+  }
+
+  if (entry.status === 'offered') {
+    const reservation = await findReservation(entry.reservation_id);
+    if (reservation.status === 'paid') {
+      view.status = 'done';
+    } else if (reservation.expires_at <= new Date()) {
+      view.status = 'missed';
+    }
+    view.reservationId = reservation.id;
+    view.offerExpiresAt = reservation.expires_at.toISOString();
+  }
+
+  return view;
+}
+
 function page(file) {
   return (req, res) => res.sendFile(path.join(__dirname, 'public', file));
 }
@@ -254,6 +285,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/events/:id', page('event.html'));
 app.get('/reserve', page('reserve.html'));
 app.get('/reservations/:id', page('reservation.html'));
+app.get('/waitlist/:id', page('waitlist.html'));
 
 app.get('/api/events', (req, res) => {
   res.json(events);
@@ -266,6 +298,75 @@ app.get('/api/events/:id', async (req, res) => {
   }
   const taken = await takenSeats(event._id);
   res.json({ event, takenSeats: taken, soldOut: taken.length === event.seats.length });
+});
+
+app.post('/api/events/:id/waitlist', waitlistLimit, async (req, res) => {
+  const event = findEvent(req.params.id);
+  if (!event) {
+    return res.status(404).json({ error: 'Nie ma takiego seansu' });
+  }
+
+  const { email, customerName } = req.body || {};
+  if (!isFilled(customerName) || !isFilled(email) || !email.includes('@')) {
+    return res.status(400).json({ error: 'Podaj imię i poprawny e-mail' });
+  }
+  const customer = loyalty.normalize(email);
+
+  const result = await db.transaction(async (client) => {
+    await db.lock(client, `lista:${event._id}`);
+
+    const existing = await client.query(
+      `SELECT w.* FROM waitlist w LEFT JOIN reservations r ON r.id = w.reservation_id
+       WHERE w.event_id = $1 AND w.email = $2
+         AND (w.status = 'waiting' OR (w.status = 'offered' AND r.status = 'held' AND r.expires_at > $3))`,
+      [event._id, customer, new Date()]
+    );
+    if (existing.rows[0]) {
+      return { status: 200, entry: existing.rows[0] };
+    }
+
+    const taken = await takenSeats(event._id, client);
+    const queue = await client.query(
+      "SELECT count(*)::int AS waiting FROM waitlist WHERE event_id = $1 AND status = 'waiting'",
+      [event._id]
+    );
+    if (taken.length < event.seats.length && queue.rows[0].waiting === 0) {
+      return { status: 409 };
+    }
+
+    const inserted = await client.query(
+      'INSERT INTO waitlist (id, event_id, email, customer_name) VALUES ($1, $2, $3, $4) RETURNING *',
+      [crypto.randomUUID(), event._id, customer, customerName]
+    );
+    return { status: 201, entry: inserted.rows[0] };
+  });
+
+  if (result.status === 409) {
+    return res.status(409).json({ error: 'Seans nie jest wyprzedany, zarezerwuj wolny fotel' });
+  }
+  res.status(result.status).json(await waitlistView(result.entry));
+});
+
+app.get('/api/waitlist/:id', async (req, res) => {
+  const entry = await findWaitlistEntry(req.params.id);
+  if (!entry) {
+    return res.status(404).json({ error: 'Nie ma takiego zapisu na liście' });
+  }
+  res.json(await waitlistView(entry));
+});
+
+app.delete('/api/waitlist/:id', async (req, res) => {
+  const found = await findWaitlistEntry(req.params.id);
+  if (!found) {
+    return res.status(404).json({ error: 'Nie ma takiego zapisu na liście' });
+  }
+
+  await db.transaction(async (client) => {
+    await db.lock(client, `lista:${found.event_id}`);
+    await client.query("UPDATE waitlist SET status = 'left' WHERE id = $1 AND status = 'waiting'", [found.id]);
+  });
+
+  res.json(await waitlistView(await findWaitlistEntry(found.id)));
 });
 
 app.get('/api/loyalty', loyaltyLimit, async (req, res) => {

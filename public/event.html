@@ -20,6 +20,23 @@
       <span class="seat"></span> wolny
       <span class="seat taken"></span> zajęty
     </p>
+
+    <section id="waitlist" hidden>
+      <h2>Wszystkie miejsca zajęte</h2>
+      <p>Zapisz się na listę oczekujących. Gdy zwolni się miejsce, dostaniesz mail z linkiem do zapłaty.</p>
+      <form id="form">
+        <label>
+          Imię
+          <input name="customerName" required>
+        </label>
+        <label>
+          E-mail
+          <input name="email" type="email" required>
+        </label>
+        <button type="submit">Powiadom mnie</button>
+        <p id="error" class="error"></p>
+      </form>
+    </section>
   </main>
 
   <script src="/common.js"></script>
@@ -33,7 +50,8 @@
         return;
       }
 
-      const { event, takenSeats } = await res.json();
+      const { event, takenSeats, soldOut } = await res.json();
+      document.getElementById('waitlist').hidden = !soldOut;
       document.getElementById('title').textContent = event.title;
       document.getElementById('info').textContent =
         `${formatDate(event.startsAt)} · ${event.hall} · ${formatPrice(event.price)} za fotel`;
@@ -56,6 +74,29 @@
         seats.appendChild(button);
       }
     }
+
+    const form = document.getElementById('form');
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button');
+      const error = document.getElementById('error');
+      button.disabled = true;
+      error.textContent = '';
+
+      const res = await fetch(`/api/events/${eventId}/waitlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: form.customerName.value, email: form.email.value }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        location.href = `/waitlist/${data.waitlistId}`;
+      } else {
+        error.textContent = data.error;
+        button.disabled = false;
+      }
+    };
 
     load();
   </script>
