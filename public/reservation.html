@@ -14,13 +14,10 @@
 
     <section id="held" hidden>
       <p id="cancelled" class="error" hidden>Płatność została przerwana. Możesz spróbować jeszcze raz.</p>
+      <p id="waiting" hidden>Czekamy na potwierdzenie płatności od Stripe'a. Bilet pojawi się tutaj sam, gdy płatność dotrze.</p>
       <p>Trzymamy Twój fotel jeszcze <strong id="timer">--:--</strong></p>
       <button id="pay" class="button">Zapłać</button>
       <p id="error" class="error"></p>
-    </section>
-
-    <section id="processing" hidden>
-      <p>Płatność w toku… Bilet pojawi się tutaj za chwilę.</p>
     </section>
 
     <section id="expired" hidden>
@@ -42,6 +39,7 @@
     const payment = new URLSearchParams(location.search).get('payment');
     let reservation;
     let timer;
+    let started = false;
 
     function show(sectionId) {
       for (const section of document.querySelectorAll('section')) {
@@ -69,25 +67,36 @@
 
     function render() {
       if (reservation.status === 'paid') {
+        clearInterval(timer);
         document.getElementById('title').textContent = 'Twój bilet';
         document.getElementById('code').textContent = reservation.code;
         show('ticket');
-      } else if (reservation.status === 'expired') {
+        return;
+      }
+      if (reservation.status === 'expired') {
+        clearInterval(timer);
         show('expired');
-      } else if (payment === 'success') {
-        show('processing');
-        setTimeout(refresh, 2000);
-      } else {
+        return;
+      }
+
+      if (!started) {
+        started = true;
         document.getElementById('cancelled').hidden = payment !== 'cancelled';
+        document.getElementById('waiting').hidden = payment !== 'success';
         document.getElementById('pay').textContent = `Zapłać ${formatPrice(reservation.amount)}`;
         show('held');
         tick();
         timer = setInterval(tick, 1000);
       }
+      setTimeout(refresh, 2000);
     }
 
     async function refresh() {
-      reservation = await fetchReservation();
+      try {
+        reservation = (await fetchReservation()) || reservation;
+      } catch (err) {
+        console.error(err);
+      }
       render();
     }
 
